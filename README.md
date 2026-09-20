@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/endralink-logo.png" alt="EndraLink logo" width="320">
+  <img src="https://raw.githubusercontent.com/brandonendall/EndraLink/main/assets/endralink-logo.png" alt="EndraLink logo" width="320">
 
   # EndraLink
 
