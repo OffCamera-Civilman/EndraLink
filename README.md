@@ -1,33 +1,31 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/brandonendall/EndraLink/main/assets/endralink-logo.png" alt="EndraLink logo" width="320">
 
-  # EndraLink
+# EndraLink
 
-  **One link. Multiple calculators.**
+**One link. Multiple calculators.**
 
-  A cross-platform connection tool for linking Android devices and desktop computers with supported graphing calculators.
+A connection tool for linking Android devices with supported graphing calculators.
 </div>
 
 ## About
 
-EndraLink is being built to make communication between modern devices and graphing calculators simpler and more accessible. The project is intended to provide a unified experience for transferring files, managing calculator content, and supporting future calculator-connected tools.
+EndraLink is being built to make communication between Android devices and graphing calculators simpler and more accessible. The project is intended to provide a unified experience for transferring files, managing calculator content, and supporting future calculator-connected tools.
 
-The multi-headed hydra represents EndraLink's goal: one application connecting to multiple devices and calculator platforms.
+The multi-headed hydra represents EndraLink's goal: one application connecting to multiple calculator platforms.
 
 ## Planned platform support
 
 - Android
-- Windows, macOS, and Linux desktop systems
 - Casio fx-CG50
 - TI-Nspire family
 
 ## Planned capabilities
 
 - Detect and connect supported calculators
-- Transfer files between calculators and Android or desktop devices
+- Transfer files between calculators and Android devices
 - Browse and manage calculator files
 - Provide a shared foundation for calculator-specific tools
-- Offer a consistent interface across supported platforms
+- Offer a consistent interface across supported calculators
 
 ## Project status
 
