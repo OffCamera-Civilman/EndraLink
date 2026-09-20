@@ -1,11 +1,16 @@
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:fillViewport="true">
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="20dp">
 <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="EndraLink" android:textSize="30sp" android:textStyle="bold" android:gravity="center"/>
 <TextView android:id="@+id/status" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Connect a Casio fx-CG50 by USB" android:gravity="center" android:padding="12dp"/>
+<TextView android:id="@+id/deviceDetails" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center" android:padding="8dp"/>
 <Button android:id="@+id/openPhone" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Choose file"/>
 <Button android:id="@+id/connect" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Connect fx-CG50"/>
-<Button android:id="@+id/copy" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Copy to fx-CG50"/>
+<Button android:id="@+id/copy" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Copy — coming next" android:enabled="false"/>
 <ProgressBar android:id="@+id/progress" style="?android:attr/progressBarStyleHorizontal" android:layout_width="match_parent" android:layout_height="wrap_content" android:max="100" android:progress="0" android:visibility="gone"/>
 <TextView android:id="@+id/progressText" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center" android:padding="8dp"/>
-<Button android:id="@+id/eject" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Eject fx-CG50"/>
-<TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Target: Casio fx-CG50 • FAT16-compatible storage" android:gravity="center" android:padding="16dp"/>
+<Button android:id="@+id/eject" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Disconnect USB"/>
+<TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Connection test only. File transfers and filesystem eject are not available yet." android:gravity="center" android:padding="16dp"/>
+<TextView android:id="@+id/version" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center" android:textSize="12sp"/>
 </LinearLayout>
+
+</ScrollView>

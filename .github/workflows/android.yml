@@ -17,10 +17,10 @@ jobs:
         with:
           gradle-version: '8.9'
       - name: Build debug APK
-        run: gradle :app:assembleDebug
+        run: gradle :app:assembleDebug :app:lintDebug
       - name: Name APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/EndraLink-0.1.2.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/EndraLink-0.1.3.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: EndraLink-0.1.2-apk
-          path: app/build/outputs/apk/debug/EndraLink-0.1.2.apk
+          name: EndraLink-0.1.3-apk
+          path: app/build/outputs/apk/debug/EndraLink-0.1.3.apk
