@@ -1,4 +1,6 @@
 <div align="center">
+  <img src="assets/endralink-logo.jpg" alt="EndraLink Hydra logo" width="192">
+
 
 # EndraLink
 
