@@ -13,9 +13,14 @@ import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import com.endralink.app.storage.Fat16Volume
+import com.endralink.app.storage.UsbStorageSession
 import java.util.concurrent.Executors
+import java.util.Locale
 
-/** USB diagnostic build: requests access and opens a handle without changing calculator storage. */
+/** USB connection and read-only FAT16 browser; storage writes are not implemented. */
 class MainActivity : AppCompatActivity() {
     private lateinit var status: TextView
     private lateinit var details: TextView
@@ -29,8 +34,11 @@ class MainActivity : AppCompatActivity() {
     private var activeDevice: UsbDevice? = null
     private var pendingDevice: UsbDevice? = null
     private var permissionIntent: PendingIntent? = null
-    private var generation = 0
-    private var destroyed = false
+    @Volatile private var generation = 0
+    @Volatile private var destroyed = false
+    private var busy = false
+    private var storage: UsbStorageSession? = null
+    private val folderStack = mutableListOf<Pair<String, Int>>()
     private val permissionAction get() = packageName + ".USB_PERMISSION"
 
     /** Re-check actual USB permission; never trust permission flags from an incoming intent. */
@@ -59,6 +67,11 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.page)) { view, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            insets
+        }
         usb = getSystemService(UsbManager::class.java)
         status = findViewById(R.id.status)
         details = findViewById(R.id.deviceDetails)
@@ -69,7 +82,7 @@ class MainActivity : AppCompatActivity() {
             addAction(permissionAction)
             addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
         }, ContextCompat.RECEIVER_NOT_EXPORTED)
-        findViewById<TextView>(R.id.version).text = "EndraLink 0.1.3 • USB connection test"
+        findViewById<TextView>(R.id.version).text = "0.1.4 • READ-ONLY PREVIEW"
         findViewById<Button>(R.id.copy).isEnabled = false
         disconnect.isEnabled = false
         findViewById<Button>(R.id.openPhone).setOnClickListener {
@@ -80,6 +93,14 @@ class MainActivity : AppCompatActivity() {
             }, 1001)
         }
         connect.setOnClickListener { findCalculator() }
+        findViewById<Button>(R.id.browse).setOnClickListener {
+            folderStack.clear()
+            browseDirectory(0)
+        }
+        findViewById<Button>(R.id.upFolder).setOnClickListener {
+            if (folderStack.isNotEmpty()) folderStack.removeAt(folderStack.lastIndex)
+            browseDirectory(folderStack.lastOrNull()?.second ?: 0)
+        }
         disconnect.setOnClickListener { closeSession("EndraLink USB connection closed. No files were changed.") }
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this,
                 Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
@@ -172,8 +193,8 @@ class MainActivity : AppCompatActivity() {
                     setBusy(false)
                     connect.isEnabled = false
                     disconnect.isEnabled = true
-                    status.text = "USB connection open • permission granted"
-                    details.text = describe(device) + "\nMass-storage interface detected. Storage has not been read or mounted."
+                    status.text = "USB connection open"
+                    details.text = describe(device) + "\nPermission granted. Tap Browse calculator to read FAT16 storage."
                 }
             }
         }
@@ -187,10 +208,13 @@ class MainActivity : AppCompatActivity() {
     } == true
 
     private fun setBusy(busy: Boolean) {
+        this.busy = busy
         progress.isIndeterminate = true
         progress.visibility = if (busy) View.VISIBLE else View.GONE
         connect.isEnabled = !busy && connection == null
         disconnect.isEnabled = busy || connection != null
+        findViewById<Button>(R.id.browse).isEnabled = !busy && connection != null
+        findViewById<Button>(R.id.upFolder).isEnabled = !busy && folderStack.isNotEmpty()
     }
 
     /** Release this app's handle and ignore stale callbacks; this is not filesystem eject. */
@@ -199,9 +223,17 @@ class MainActivity : AppCompatActivity() {
         permissionIntent?.cancel()
         permissionIntent = null
         pendingDevice = null
-        connection?.close()
+        val closingStorage = storage
+        val closingConnection = connection
+        storage = null
+        worker.execute {
+            try { closingStorage?.close() } finally { closingConnection?.close() }
+        }
         connection = null
         activeDevice = null
+        folderStack.clear()
+        findViewById<LinearLayout>(R.id.fileList).removeAllViews()
+        findViewById<View>(R.id.browserPanel).visibility = View.GONE
         setBusy(false)
         status.text = message
     }
@@ -210,6 +242,104 @@ class MainActivity : AppCompatActivity() {
         val tracked = activeDevice ?: pendingDevice ?: return
         if (!isAttached(tracked)) closeSession("USB device disconnected. Reconnect and tap Connect.")
     }
+
+    /** Initialize a read-only session on demand and serialize all sector reads with cleanup. */
+    private fun browseDirectory(cluster: Int) {
+        if (busy) return
+        val handle = connection ?: return
+        val device = activeDevice ?: return
+        val intf = storageInterface(device) ?: return
+        val request = generation
+        val previous = storage
+        setBusy(true)
+        findViewById<LinearLayout>(R.id.fileList).removeAllViews()
+        status.text = "Reading calculator storage…"
+        worker.execute {
+            var session = previous
+            try {
+                if (session == null) session = UsbStorageSession(handle, intf) {
+                    destroyed || generation != request
+                }
+                val opened = session
+                val entries = opened.volume.list(cluster)
+                main.post {
+                    if (destroyed || generation != request) {
+                        if (previous == null) opened.close()
+                    } else {
+                        storage = opened
+                        showDirectory(opened.volume, entries)
+                    }
+                }
+            } catch (e: Exception) {
+                if (previous == null) session?.close()
+                main.post {
+                    if (!destroyed && generation == request) {
+                        closeSession("Storage read stopped: " + (e.message ?: e.javaClass.simpleName))
+                    }
+                }
+            }
+        }
+    }
+
+    /** Show read-only folder navigation; file taps display metadata rather than starting transfers. */
+    private fun showDirectory(volume: Fat16Volume, entries: List<Fat16Volume.Entry>) {
+        setBusy(false)
+        status.text = "FAT16 storage ready"
+        details.text = "Read-only access • " + entries.size + " items in this folder"
+        findViewById<View>(R.id.browserPanel).visibility = View.VISIBLE
+        findViewById<TextView>(R.id.storageInfo).text =
+            "FAT16 • " + String.format(Locale.ROOT, "%.1f MiB", volume.capacityBytes / 1048576.0) +
+                if (volume.label.isNotBlank()) " • " + volume.label else ""
+        findViewById<TextView>(R.id.folderPath).text = "/" + folderStack.joinToString("/") { it.first }
+        val list = findViewById<LinearLayout>(R.id.fileList)
+        list.removeAllViews()
+        if (entries.isEmpty()) {
+            list.addView(TextView(this).apply {
+                text = "This folder is empty."
+                setTextColor(ContextCompat.getColor(context, R.color.muted))
+                setPadding(dp(8), dp(16), dp(8), dp(16))
+            })
+        }
+        if (entries.size > 200) {
+            list.addView(TextView(this).apply {
+                text = "Showing the first 200 of " + entries.size + " items in this preview."
+                setTextColor(ContextCompat.getColor(context, R.color.muted))
+            })
+        }
+        entries.take(200).forEach { entry ->
+            list.addView(TextView(this).apply {
+                text = entry.name + if (entry.directory) "  /" else "\n" + entry.size + " bytes"
+                textSize = 16f
+                minHeight = dp(56)
+                setTextColor(ContextCompat.getColor(context, if (entry.directory) R.color.cyan else R.color.silver))
+                setPadding(dp(8), dp(14), dp(8), dp(14))
+                isClickable = true
+                isFocusable = true
+                setOnClickListener {
+                    if (!busy) {
+                        if (entry.directory) {
+                            if (folderStack.size >= 32 || folderStack.any { it.second == entry.cluster }) {
+                                status.text = "Folder navigation limit reached."
+                            } else {
+                                folderStack.add(entry.name to entry.cluster)
+                                browseDirectory(entry.cluster)
+                            }
+                        } else {
+                            AlertDialog.Builder(this@MainActivity).setTitle(entry.name)
+                                .setMessage(entry.size.toString() + " bytes\n\nRead-only preview. File transfers are not enabled.")
+                                .setPositiveButton("OK", null).show()
+                        }
+                    }
+                }
+            })
+            list.addView(View(this).apply {
+                setBackgroundColor(ContextCompat.getColor(context, R.color.outline))
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1))
+            })
+        }
+    }
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     override fun onResume() {
         super.onResume()
@@ -238,4 +368,3 @@ class MainActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.progressText).text = "Selected: " + name
     }
 }
-

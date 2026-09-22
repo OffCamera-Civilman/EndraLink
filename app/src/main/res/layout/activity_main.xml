@@ -1,16 +1,63 @@
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:fillViewport="true">
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="20dp">
-<TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="EndraLink" android:textSize="30sp" android:textStyle="bold" android:gravity="center"/>
-<TextView android:id="@+id/status" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Connect a Casio fx-CG50 by USB" android:gravity="center" android:padding="12dp"/>
-<TextView android:id="@+id/deviceDetails" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center" android:padding="8dp"/>
-<Button android:id="@+id/openPhone" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Choose file"/>
-<Button android:id="@+id/connect" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Connect fx-CG50"/>
-<Button android:id="@+id/copy" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Copy — coming next" android:enabled="false"/>
-<ProgressBar android:id="@+id/progress" style="?android:attr/progressBarStyleHorizontal" android:layout_width="match_parent" android:layout_height="wrap_content" android:max="100" android:progress="0" android:visibility="gone"/>
-<TextView android:id="@+id/progressText" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center" android:padding="8dp"/>
-<Button android:id="@+id/eject" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Disconnect USB"/>
-<TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Connection test only. File transfers and filesystem eject are not available yet." android:gravity="center" android:padding="16dp"/>
-<TextView android:id="@+id/version" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center" android:textSize="12sp"/>
-</LinearLayout>
-
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/page" android:layout_width="match_parent" android:layout_height="match_parent"
+    android:background="@color/navy" android:fillViewport="true">
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="vertical" android:padding="24dp">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical">
+            <ImageView android:layout_width="64dp" android:layout_height="64dp"
+                android:src="@drawable/endralink_logo" android:contentDescription="EndraLink Hydra logo"/>
+            <LinearLayout android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
+                android:orientation="vertical" android:paddingStart="16dp" android:paddingEnd="0dp">
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:text="EndraLink" android:textSize="30sp" android:textStyle="bold" android:textColor="@color/silver"/>
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:text="YOUR CALCULATOR. CONNECTED." android:textSize="10sp" android:letterSpacing="0.10" android:textColor="@color/cyan"/>
+            </LinearLayout>
+        </LinearLayout>
+        <View android:layout_width="match_parent" android:layout_height="3dp" android:layout_marginTop="20dp"
+            android:layout_marginBottom="20dp" android:background="@drawable/accent_line"/>
+        <TextView android:id="@+id/version" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="0.1.4 • READ-ONLY PREVIEW" android:textSize="12sp" android:letterSpacing="0.08" android:textColor="@color/cyan"/>
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp"
+            android:background="@drawable/panel" android:padding="20dp" android:orientation="vertical">
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="USB CONNECTION"
+                android:textSize="11sp" android:letterSpacing="0.12" android:textColor="@color/muted"/>
+            <TextView android:id="@+id/status" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="10dp" android:text="Connect your fx-CG50" android:textSize="20sp"
+                android:textStyle="bold" android:textColor="@color/silver" android:accessibilityLiveRegion="polite"/>
+            <TextView android:id="@+id/deviceDetails" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="8dp" android:text="Use USB Flash mode on the calculator." android:textColor="@color/muted" android:textSize="13sp"/>
+            <ProgressBar android:id="@+id/progress" style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent" android:layout_height="4dp" android:layout_marginTop="16dp"
+                android:indeterminateTint="@color/cyan" android:visibility="gone"/>
+        </LinearLayout>
+        <com.google.android.material.button.MaterialButton android:id="@+id/connect" style="@style/EndraButton"
+            android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="16dp" android:text="Connect fx-CG50"/>
+        <com.google.android.material.button.MaterialButton android:id="@+id/browse" style="@style/EndraOutline"
+            android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Browse calculator" android:enabled="false"/>
+        <LinearLayout android:id="@+id/browserPanel" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="16dp" android:background="@drawable/panel" android:padding="16dp" android:orientation="vertical" android:visibility="gone">
+            <TextView android:id="@+id/storageInfo" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:textColor="@color/cyan" android:textSize="12sp"/>
+            <TextView android:id="@+id/folderPath" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="8dp" android:text="/" android:textSize="18sp" android:textColor="@color/silver"/>
+            <com.google.android.material.button.MaterialButton android:id="@+id/upFolder" style="@style/EndraOutline"
+                android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Parent folder"/>
+            <LinearLayout android:id="@+id/fileList" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="vertical"/>
+        </LinearLayout>
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="24dp"
+            android:text="ON YOUR ANDROID DEVICE" android:textSize="11sp" android:letterSpacing="0.12" android:textColor="@color/muted"/>
+        <com.google.android.material.button.MaterialButton android:id="@+id/openPhone" style="@style/EndraOutline"
+            android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Choose local file"/>
+        <TextView android:id="@+id/progressText" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="No local file selected" android:textColor="@color/muted" android:paddingBottom="8dp"/>
+        <com.google.android.material.button.MaterialButton android:id="@+id/copy" style="@style/EndraButton"
+            android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Transfer — coming next" android:enabled="false"/>
+        <com.google.android.material.button.MaterialButton android:id="@+id/eject" style="@style/EndraOutline"
+            android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Disconnect USB" android:enabled="false"/>
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp"
+            android:text="Read-only browsing. No calculator files are created, changed, or deleted."
+            android:textSize="12sp" android:gravity="center" android:textColor="@color/muted" android:paddingBottom="16dp"/>
+    </LinearLayout>
 </ScrollView>

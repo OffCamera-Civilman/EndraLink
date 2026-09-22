@@ -1,3 +1,11 @@
 <resources>
     <color name="launcher_background">#001323</color>
+    <color name="navy">#04111F</color>
+    <color name="surface">#0B2135</color>
+    <color name="surface_raised">#102D45</color>
+    <color name="cyan">#19D5F5</color>
+    <color name="blue">#087FFF</color>
+    <color name="silver">#EAF3FA</color>
+    <color name="muted">#A0B8CB</color>
+    <color name="outline">#234963</color>
 </resources>
