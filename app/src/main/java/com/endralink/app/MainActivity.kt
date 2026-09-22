@@ -15,6 +15,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowCompat
 import com.endralink.app.storage.Fat16Volume
 import com.endralink.app.storage.UsbStorageSession
 import java.util.concurrent.Executors
@@ -67,6 +68,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightNavigationBars = false
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.page)) { view, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
