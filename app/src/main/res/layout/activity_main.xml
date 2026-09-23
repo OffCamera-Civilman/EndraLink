@@ -56,6 +56,8 @@
             android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Transfer — coming next" android:enabled="false"/>
         <com.google.android.material.button.MaterialButton android:id="@+id/eject" style="@style/EndraOutline"
             android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Disconnect USB" android:enabled="false"/>
+        <com.google.android.material.button.MaterialButton android:id="@+id/exportLog" style="@style/EndraOutline"
+            android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Export debug log"/>
         <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp"
             android:text="Read-only browsing. No calculator files are created, changed, or deleted."
             android:textSize="12sp" android:gravity="center" android:textColor="@color/muted" android:paddingBottom="16dp"/>

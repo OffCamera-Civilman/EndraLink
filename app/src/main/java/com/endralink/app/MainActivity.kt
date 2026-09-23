@@ -16,6 +16,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowCompat
+import androidx.core.widget.doAfterTextChanged
 import com.endralink.app.storage.Fat16Volume
 import com.endralink.app.storage.UsbStorageSession
 import java.util.concurrent.Executors
@@ -45,9 +46,19 @@ class MainActivity : AppCompatActivity() {
     /** Re-check actual USB permission; never trust permission flags from an incoming intent. */
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
+            DebugLog.event("USB_BROADCAST", "action=" + intent.action +
+                " callbackId=" + intent.data?.lastPathSegment + " expectedId=" + generation +
+                " grantedExtra=" + intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false))
             if (intent.action == permissionAction) {
-                if (intent.data?.lastPathSegment != generation.toString()) return
-                val device = pendingDevice ?: return
+                if (intent.data?.lastPathSegment != generation.toString()) {
+                    DebugLog.event("PERMISSION_CALLBACK_IGNORED", "request identity mismatch")
+                    return
+                }
+                val device = pendingDevice ?: run {
+                    DebugLog.event("PERMISSION_CALLBACK_IGNORED", "no pending device")
+                    return
+                }
+                logDevice("PERMISSION_RESULT", device)
                 permissionIntent?.cancel()
                 permissionIntent = null
                 pendingDevice = null
@@ -67,6 +78,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        DebugLog.start(this)
+        DebugLog.event("ACTIVITY_CREATE", "restored=" + (savedInstanceState != null))
         setContentView(R.layout.activity_main)
         WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightNavigationBars = false
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.page)) { view, insets ->
@@ -76,6 +89,7 @@ class MainActivity : AppCompatActivity() {
         }
         usb = getSystemService(UsbManager::class.java)
         status = findViewById(R.id.status)
+        status.doAfterTextChanged { DebugLog.event("STATUS", it.toString()) }
         details = findViewById(R.id.deviceDetails)
         progress = findViewById(R.id.progress)
         connect = findViewById(R.id.connect)
@@ -88,22 +102,29 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.copy).isEnabled = false
         disconnect.isEnabled = false
         findViewById<Button>(R.id.openPhone).setOnClickListener {
+            DebugLog.event("TAP", "choose_local_file")
             startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)
                 type = "*/*"
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }, 1001)
         }
-        connect.setOnClickListener { findCalculator() }
+        connect.setOnClickListener { DebugLog.event("TAP", "connect"); findCalculator() }
         findViewById<Button>(R.id.browse).setOnClickListener {
+            DebugLog.event("TAP", "browse_calculator")
             folderStack.clear()
             browseDirectory(0)
         }
         findViewById<Button>(R.id.upFolder).setOnClickListener {
+            DebugLog.event("TAP", "parent_folder")
             if (folderStack.isNotEmpty()) folderStack.removeAt(folderStack.lastIndex)
             browseDirectory(folderStack.lastOrNull()?.second ?: 0)
         }
-        disconnect.setOnClickListener { closeSession("EndraLink USB connection closed. No files were changed.") }
+        disconnect.setOnClickListener {
+            DebugLog.event("TAP", "disconnect")
+            closeSession("EndraLink USB connection closed. No files were changed.")
+        }
+        findViewById<Button>(R.id.exportLog).setOnClickListener { requestLogExport() }
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this,
                 Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1002)
@@ -124,12 +145,15 @@ class MainActivity : AppCompatActivity() {
     /** User selects the intended device; the first USB device is not assumed to be an fx-CG50. */
     private fun findCalculator() {
         val devices = usb.deviceList.values.sortedBy { it.deviceName }
+        DebugLog.event("USB_ENUMERATE", "count=" + devices.size)
+        devices.forEach { logDevice("USB_DEVICE", it) }
         if (devices.isEmpty()) {
             status.text = "No USB device detected. Check the cable and USB adapter."
             details.text = ""
             return
         }
         val candidates = devices.filter { storageInterface(it) != null }
+        DebugLog.event("USB_CANDIDATES", "massStorageCount=" + candidates.size)
         if (candidates.isEmpty()) {
             status.text = "USB detected, but no compatible mass-storage interface. Select USB Flash mode on the fx-CG50, then try again."
             details.text = devices.joinToString("\n") { describe(it) }
@@ -137,11 +161,12 @@ class MainActivity : AppCompatActivity() {
         }
         AlertDialog.Builder(this).setTitle("Select your fx-CG50 USB device")
             .setItems(candidates.map { describe(it) }.toTypedArray()) { _, index -> requestAccess(candidates[index]) }
-            .setNegativeButton("Cancel", null).show()
+            .setNegativeButton("Cancel") { _, _ -> DebugLog.event("TAP", "device_selection_cancel") }.show()
     }
 
     /** Immutable package-scoped callback preserves our request identity, including on Android 14+. */
     private fun requestAccess(device: UsbDevice) {
+        logDevice("DEVICE_SELECTED", device)
         if (!isAttached(device)) {
             status.text = "USB device disconnected. Reconnect and try again."
             return
@@ -149,6 +174,7 @@ class MainActivity : AppCompatActivity() {
         generation++
         details.text = describe(device)
         if (usb.hasPermission(device)) {
+            DebugLog.event("PERMISSION_ALREADY_GRANTED")
             openDevice(device)
             return
         }
@@ -161,14 +187,25 @@ class MainActivity : AppCompatActivity() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         permissionIntent = result
         try {
+            DebugLog.event("PERMISSION_REQUEST", "id=" + generation)
             usb.requestPermission(device, result)
+            val observedRequest = generation
+            listOf(2000L, 10000L).forEach { delay ->
+                main.postDelayed({
+                    if (!destroyed && generation == observedRequest && pendingDevice != null) {
+                        logDevice("PERMISSION_STILL_WAITING_" + delay + "MS", device)
+                    }
+                }, delay)
+            }
         } catch (e: RuntimeException) {
+            DebugLog.event("PERMISSION_REQUEST_ERROR", error = e)
             closeSession("Unable to request USB permission: " + (e.message ?: e.javaClass.simpleName))
         }
     }
 
     /** Open off the UI thread; do not claim interfaces, detach drivers, or write storage. */
     private fun openDevice(device: UsbDevice) {
+        logDevice("USB_OPEN_BEGIN", device)
         val request = generation
         activeDevice = device
         setBusy(true)
@@ -178,14 +215,17 @@ class MainActivity : AppCompatActivity() {
             var error: String? = null
             try {
                 if (usb.hasPermission(device) && isAttached(device)) opened = usb.openDevice(device)
+                DebugLog.event("USB_OPEN_RESULT", "handleOpened=" + (opened != null))
                 if (opened == null) error = "Could not open USB device. Reconnect and try again."
             } catch (e: RuntimeException) {
+                DebugLog.event("USB_OPEN_ERROR", error = e)
                 error = "USB connection failed: " + (e.message ?: e.javaClass.simpleName)
             }
             val result = opened
             val failure = error
             main.post {
                 if (destroyed || request != generation || !isAttached(device)) {
+                    DebugLog.event("USB_OPEN_DISCARDED", "request=" + request + " current=" + generation + " destroyed=" + destroyed)
                     result?.close()
                     if (!destroyed && request == generation) closeSession("USB device disconnected.")
                 } else if (result == null) {
@@ -210,6 +250,7 @@ class MainActivity : AppCompatActivity() {
     } == true
 
     private fun setBusy(busy: Boolean) {
+        DebugLog.event("BUSY_STATE", "busy=" + busy + " handleOpen=" + (connection != null))
         this.busy = busy
         progress.isIndeterminate = true
         progress.visibility = if (busy) View.VISIBLE else View.GONE
@@ -221,6 +262,7 @@ class MainActivity : AppCompatActivity() {
 
     /** Release this app's handle and ignore stale callbacks; this is not filesystem eject. */
     private fun closeSession(message: String) {
+        DebugLog.event("SESSION_CLOSE", "id=" + generation + " reason=" + message)
         generation++
         permissionIntent?.cancel()
         permissionIntent = null
@@ -247,6 +289,8 @@ class MainActivity : AppCompatActivity() {
 
     /** Initialize a read-only session on demand and serialize all sector reads with cleanup. */
     private fun browseDirectory(cluster: Int) {
+        DebugLog.event("BROWSE_BEGIN", "cluster=" + cluster + " busy=" + busy +
+            " handleOpen=" + (connection != null) + " storageOpen=" + (storage != null))
         if (busy) return
         val handle = connection ?: return
         val device = activeDevice ?: return
@@ -264,6 +308,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 val opened = session
                 val entries = opened.volume.list(cluster)
+                DebugLog.event("BROWSE_RESULT", "entryCount=" + entries.size + " capacityBytes=" + opened.volume.capacityBytes)
                 main.post {
                     if (destroyed || generation != request) {
                         if (previous == null) opened.close()
@@ -273,6 +318,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             } catch (e: Exception) {
+                DebugLog.event("BROWSE_ERROR", error = e)
                 if (previous == null) session?.close()
                 main.post {
                     if (!destroyed && generation == request) {
@@ -318,6 +364,7 @@ class MainActivity : AppCompatActivity() {
                 isClickable = true
                 isFocusable = true
                 setOnClickListener {
+                    DebugLog.event("TAP", "entry directory=" + entry.directory + " cluster=" + entry.cluster)
                     if (!busy) {
                         if (entry.directory) {
                             if (folderStack.size >= 32 || folderStack.any { it.second == entry.cluster }) {
@@ -345,10 +392,13 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        DebugLog.event("ACTIVITY_RESUME", "pending=" + (pendingDevice != null) + " busy=" + busy)
+        pendingDevice?.let { logDevice("PERMISSION_ON_RESUME", it) }
         if (::usb.isInitialized) checkAttachment()
     }
 
     override fun onDestroy() {
+        DebugLog.event("ACTIVITY_DESTROY", "finishing=" + isFinishing + " changingConfig=" + isChangingConfigurations)
         destroyed = true
         closeSession("USB connection closed.")
         unregisterReceiver(receiver)
@@ -359,6 +409,11 @@ class MainActivity : AppCompatActivity() {
     @Deprecated("Legacy file picker callback")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        DebugLog.event("PICKER_RESULT", "request=" + requestCode + " result=" + resultCode)
+        if (requestCode == 1003) {
+            if (resultCode == Activity.RESULT_OK) data?.data?.let { exportLog(it) }
+            return
+        }
         if (requestCode != 1001 || resultCode != Activity.RESULT_OK) return
         val uri = data?.data ?: return
         var name = "Selected file"
@@ -368,5 +423,63 @@ class MainActivity : AppCompatActivity() {
             }
         } catch (_: RuntimeException) { /* Some providers omit display names. */ }
         findViewById<TextView>(R.id.progressText).text = "Selected: " + name
+    }
+
+    /** Log numeric USB identity and endpoint layout, never serial numbers or user file names. */
+    private fun logDevice(event: String, device: UsbDevice) {
+        val description = runCatching {
+            "vid=%04X pid=%04X".format(device.vendorId, device.productId) +
+                " deviceId=" + device.deviceId + " path=" + device.deviceName +
+                " permission=" + usb.hasPermission(device) + " attached=" + isAttached(device) +
+                " interfaces=" + (0 until device.interfaceCount).joinToString(";") { i ->
+                    val intf = device.getInterface(i)
+                    "id=" + intf.id + ",class=" + intf.interfaceClass +
+                        ",subclass=" + intf.interfaceSubclass + ",protocol=" + intf.interfaceProtocol +
+                        ",endpoints=" + (0 until intf.endpointCount).joinToString(",") { j ->
+                            val endpoint = intf.getEndpoint(j)
+                            endpoint.address.toString() + "/" + endpoint.type + "/" + endpoint.maxPacketSize
+                        }
+                }
+        }.getOrElse { "USB diagnostic read failed: " + it.javaClass.simpleName }
+        DebugLog.event(event, description)
+    }
+
+    /** Export through Android's Save dialog; remains available when a USB attempt is stuck. */
+    private fun requestLogExport() {
+        DebugLog.event("TAP", "export_debug_log")
+        try {
+            startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "text/plain"
+                putExtra(Intent.EXTRA_TITLE, "EndraLink-debug-" + System.currentTimeMillis() + ".txt")
+            }, 1003)
+        } catch (e: ActivityNotFoundException) {
+            DebugLog.event("EXPORT_PICKER_ERROR", error = e)
+            Toast.makeText(this, "No Android file-saving app is available.", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    /** Use a separate worker so a blocked USB read cannot prevent saving diagnostics. */
+    private fun exportLog(destination: Uri) {
+        DebugLog.event("EXPORT_BEGIN")
+        val exportContext = applicationContext
+        Thread({
+            try {
+                val text = DebugLog.snapshot()
+                val stream = exportContext.contentResolver.openOutputStream(destination, "wt")
+                    ?: throw java.io.IOException("Could not open the selected output file")
+                stream.bufferedWriter(Charsets.UTF_8).use { it.write(text) }
+                DebugLog.event("EXPORT_SUCCESS")
+                main.post { Toast.makeText(exportContext, "Debug log saved. Attach the text file in chat.", Toast.LENGTH_LONG).show() }
+            } catch (e: Exception) {
+                DebugLog.event("EXPORT_ERROR", error = e)
+                main.post { Toast.makeText(exportContext, "Could not save the debug log. Please try another location.", Toast.LENGTH_LONG).show() }
+            }
+        }, "EndraLink-log-export").start()
+    }
+
+    override fun onPause() {
+        DebugLog.event("ACTIVITY_PAUSE")
+        super.onPause()
     }
 }
