@@ -30,7 +30,7 @@ The multi-headed hydra represents EndraLink's goal: one application connecting t
 
 ## Project status
 
-EndraLink includes an illustrated Hydra cavern home screen, a circuit-themed fx-CG50 workspace, read-only FAT16 browsing, and exportable diagnostics. TI-Nspire, HP Prime, and Donate are disabled until future releases. Version 0.1.7 adds an explicit calculator eject request; hardware testing is still required to confirm calculator-specific behavior.
+EndraLink includes an illustrated Hydra cavern home screen, a circuit-themed fx-CG50 workspace, read-only FAT16 browsing, and exportable diagnostics. TI-Nspire, HP Prime, and Donate are disabled until future releases. Version 0.1.8 follows successful fx-CG50 hardware testing of USB permission, direct calculator access, FAT16 browsing, folder/file listing, and diagnostic export. The calculator rejected the explicit SCSI eject command during that test, so Android/system eject remains the fallback.
 
 ## Contributing
 
@@ -49,7 +49,7 @@ A license has not yet been selected. Until one is added, all rights are reserved
 
 ## Download Android APK
 
-**[Download EndraLink 0.1.7 APK](https://github.com/brandonendall/EndraLink/releases/download/v0.1.7/EndraLink.apk)**
+**[Download EndraLink 0.1.8 APK](https://github.com/brandonendall/EndraLink/releases/download/v0.1.8/EndraLink.apk)**
 
 Latest-release fallback: **[EndraLink.apk](https://github.com/brandonendall/EndraLink/releases/latest/download/EndraLink.apk)**
 
