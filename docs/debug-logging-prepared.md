@@ -1,8 +1,6 @@
-# Diagnostic logging — prepared, not built
+# Diagnostic logging — included in 0.1.5
 
-This change adds logging to the existing 0.1.4 screen. It does not implement the proposed cavern/Hydra home screen or circuit-board calculator screen, fix the connection bugs, change USB ownership policy, or enable file transfers.
-
-No APK build is authorized yet. Keep this change off main and do not open a pull request (the current workflow builds pull requests). Compile, run lint and test export when the user explicitly requests the next build.
+The logging update is included in the user-authorized 0.1.5 build. See [build notes](build-0.1.5.md) for the accompanying connection fixes. Illustrated screens and file transfers remain future work.
 
 ## Recorded events
 
@@ -18,7 +16,7 @@ Local document names/URIs, device serial numbers, file contents and USB payloads
 
 The log rotates between two files of approximately 256 KiB each. Export joins the retained logs into a text file, using Android's Save dialog. No broad storage permission or network transfer is needed. Export runs independently of the USB worker so it remains usable while a USB operation is stuck.
 
-## Test after the next build is authorized
+## Hardware test checklist
 
 1. Reproduce the permission hang, then choose Export debug log and save the .txt.
 2. Verify the log distinguishes Android permission granted from callback received/accepted.

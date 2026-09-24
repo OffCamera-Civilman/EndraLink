@@ -5,12 +5,15 @@ import java.io.Closeable
 import java.io.IOException
 import com.endralink.app.DebugLog
 
-/** Owns a non-forced USB interface claim and exposes only read-only storage operations. */
+/** Owns a USB interface claim (driver detach requires explicit user confirmation) and exposes only read-only storage operations. */
 class UsbStorageSession(
     private val connection: UsbDeviceConnection,
     private val intf: UsbInterface,
+    private val directAccess: Boolean = false,
     private val isCancelled: () -> Boolean
 ) : Closeable {
+    class InterfaceBusyException : IOException("USB storage is busy. Close other USB apps and safely eject any Android-mounted calculator storage before retrying.")
+
     private var closed = false
     val volume: Fat16Volume
 
@@ -18,11 +21,11 @@ class UsbStorageSession(
         val endpoints = (0 until intf.endpointCount).map { intf.getEndpoint(it) }
         val input = endpoints.first { it.type == UsbConstants.USB_ENDPOINT_XFER_BULK && it.direction == UsbConstants.USB_DIR_IN }
         val output = endpoints.first { it.type == UsbConstants.USB_ENDPOINT_XFER_BULK && it.direction == UsbConstants.USB_DIR_OUT }
-        DebugLog.event("USB_CLAIM_BEGIN", "interfaceId=" + intf.id + " force=false")
-        val claimed = connection.claimInterface(intf, false)
+        DebugLog.event("USB_CLAIM_BEGIN", "interfaceId=" + intf.id + " force=" + directAccess)
+        val claimed = connection.claimInterface(intf, directAccess)
         DebugLog.event("USB_CLAIM_RESULT", "claimed=" + claimed)
         if (!claimed) {
-            throw IOException("USB storage is busy. Close other USB apps; if Android mounted it, safely eject it there first. EndraLink will not force-detach a storage driver.")
+            throw InterfaceBusyException()
         }
         try {
             val bot = ReadOnlyBot(object : ReadOnlyBot.BulkPipe {

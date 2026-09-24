@@ -58,18 +58,7 @@ class MainActivity : AppCompatActivity() {
                     DebugLog.event("PERMISSION_CALLBACK_IGNORED", "no pending device")
                     return
                 }
-                logDevice("PERMISSION_RESULT", device)
-                permissionIntent?.cancel()
-                permissionIntent = null
-                pendingDevice = null
-                if (!isAttached(device)) {
-                    closeSession("USB device disconnected. Reconnect and tap Connect.")
-                } else if (usb.hasPermission(device)) {
-                    openDevice(device)
-                } else {
-                    setBusy(false)
-                    status.text = "USB permission denied. Tap Connect to try again."
-                }
+                finishPermission(device)
             } else if (intent.action == UsbManager.ACTION_USB_DEVICE_DETACHED) {
                 checkAttachment()
             }
@@ -96,9 +85,11 @@ class MainActivity : AppCompatActivity() {
         disconnect = findViewById(R.id.eject)
         ContextCompat.registerReceiver(this, receiver, IntentFilter().apply {
             addAction(permissionAction)
-            addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+            addDataScheme("endralink")
         }, ContextCompat.RECEIVER_NOT_EXPORTED)
-        findViewById<TextView>(R.id.version).text = "0.1.4 • READ-ONLY PREVIEW"
+        ContextCompat.registerReceiver(this, receiver, IntentFilter(UsbManager.ACTION_USB_DEVICE_DETACHED),
+            ContextCompat.RECEIVER_NOT_EXPORTED)
+        findViewById<TextView>(R.id.version).text = "0.1.5 • READ-ONLY PREVIEW"
         findViewById<Button>(R.id.copy).isEnabled = false
         disconnect.isEnabled = false
         findViewById<Button>(R.id.openPhone).setOnClickListener {
@@ -190,10 +181,12 @@ class MainActivity : AppCompatActivity() {
             DebugLog.event("PERMISSION_REQUEST", "id=" + generation)
             usb.requestPermission(device, result)
             val observedRequest = generation
-            listOf(2000L, 10000L).forEach { delay ->
+            listOf(2000L, 10000L, 30000L).forEach { delay ->
                 main.postDelayed({
                     if (!destroyed && generation == observedRequest && pendingDevice != null) {
-                        logDevice("PERMISSION_STILL_WAITING_" + delay + "MS", device)
+                        logDevice("PERMISSION_CHECK_" + delay + "MS", device)
+                        if (usb.hasPermission(device)) finishPermission(device)
+                        else if (delay == 30000L) closeSession("USB permission was not received. Tap Connect to try again.")
                     }
                 }, delay)
             }
@@ -201,6 +194,17 @@ class MainActivity : AppCompatActivity() {
             DebugLog.event("PERMISSION_REQUEST_ERROR", error = e)
             closeSession("Unable to request USB permission: " + (e.message ?: e.javaClass.simpleName))
         }
+    }
+
+    private fun finishPermission(device: UsbDevice) {
+        if (pendingDevice == null) return
+        logDevice("PERMISSION_RESULT", device)
+        permissionIntent?.cancel()
+        permissionIntent = null
+        pendingDevice = null
+        if (!isAttached(device)) closeSession("USB device disconnected. Reconnect and tap Connect.")
+        else if (usb.hasPermission(device)) openDevice(device)
+        else closeSession("USB permission denied. Tap Connect to try again.")
     }
 
     /** Open off the UI thread; do not claim interfaces, detach drivers, or write storage. */
@@ -280,6 +284,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<View>(R.id.browserPanel).visibility = View.GONE
         setBusy(false)
         status.text = message
+        details.text = ""
     }
 
     private fun checkAttachment() {
@@ -288,7 +293,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** Initialize a read-only session on demand and serialize all sector reads with cleanup. */
-    private fun browseDirectory(cluster: Int) {
+    private fun browseDirectory(cluster: Int, directAccess: Boolean = false) {
         DebugLog.event("BROWSE_BEGIN", "cluster=" + cluster + " busy=" + busy +
             " handleOpen=" + (connection != null) + " storageOpen=" + (storage != null))
         if (busy) return
@@ -303,7 +308,7 @@ class MainActivity : AppCompatActivity() {
         worker.execute {
             var session = previous
             try {
-                if (session == null) session = UsbStorageSession(handle, intf) {
+                if (session == null) session = UsbStorageSession(handle, intf, directAccess) {
                     destroyed || generation != request
                 }
                 val opened = session
@@ -322,7 +327,23 @@ class MainActivity : AppCompatActivity() {
                 if (previous == null) session?.close()
                 main.post {
                     if (!destroyed && generation == request) {
-                        closeSession("Storage read stopped: " + (e.message ?: e.javaClass.simpleName))
+                        if (e is UsbStorageSession.InterfaceBusyException && !directAccess &&
+                            device.vendorId == 0x07cf && device.productId == 0x6102) {
+                            setBusy(false)
+                            status.text = "USB permission granted, but calculator storage is busy."
+                            details.text = "Storage is not ready to browse."
+                            AlertDialog.Builder(this)
+                                .setTitle("Use direct calculator access?")
+                                .setMessage("Android's USB driver may be holding the calculator. Close other USB apps. If Android mounted the calculator, safely eject it in Android first and wait for any transfers to finish.\n\nDirect access detaches that driver so EndraLink can read storage. EndraLink will not write calculator files.")
+                                .setPositiveButton("Use direct access") { _, _ ->
+                                    if (!destroyed && generation == request && isAttached(device)) {
+                                        DebugLog.event("DIRECT_ACCESS_CONFIRMED")
+                                        browseDirectory(cluster, true)
+                                    }
+                                }
+                                .setNegativeButton("Cancel") { _, _ -> DebugLog.event("DIRECT_ACCESS_CANCELLED") }
+                                .show()
+                        } else closeSession("Storage read stopped: " + (e.message ?: e.javaClass.simpleName))
                     }
                 }
             }
@@ -393,7 +414,10 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         DebugLog.event("ACTIVITY_RESUME", "pending=" + (pendingDevice != null) + " busy=" + busy)
-        pendingDevice?.let { logDevice("PERMISSION_ON_RESUME", it) }
+        pendingDevice?.let {
+            logDevice("PERMISSION_ON_RESUME", it)
+            if (usb.hasPermission(it)) finishPermission(it)
+        }
         if (::usb.isInitialized) checkAttachment()
     }
 

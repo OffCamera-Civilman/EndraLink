@@ -4,9 +4,16 @@ on:
     branches: [ main ]
   pull_request:
   workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.package.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -16,17 +23,58 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - name: Build debug APK
+      - name: Test, build and lint
         run: gradle :app:testDebugUnitTest :app:assembleDebug :app:lintDebug
-      - name: Name APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/EndraLink-0.1.4.apk
+      - name: Package APK
+        id: package
+        shell: bash
+        run: |
+          version=$(python3 -c 'import json; print(json.load(open("app/build/outputs/apk/debug/output-metadata.json"))["elements"][0]["versionName"])')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/app-debug.apk dist/EndraLink.apk
+          cd dist
+          sha256sum EndraLink.apk > EndraLink.apk.sha256
       - uses: actions/upload-artifact@v4
         with:
-          name: EndraLink-0.1.4-apk
-          path: app/build/outputs/apk/debug/EndraLink-0.1.4.apk
+          name: EndraLink-apk
+          path: dist/
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: EndraLink-test-results
           path: app/build/test-results/testDebugUnitTest/
+  publish:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: EndraLink-apk
+          path: dist
+      - name: Publish public APK download
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.build.outputs.version }}
+        shell: bash
+        run: |
+          tag="v$VERSION"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists. Bump versionName and versionCode for a new build."
+            exit 1
+          fi
+          cat > release-notes.md <<'NOTES'
+          Android testing build — read-only calculator browsing. File transfers are not enabled.
+
+          Download **EndraLink.apk** below (Android 8.0 or newer). This is a debug APK, not a production release.
+
+          To report a problem: reproduce it, tap **Export debug log**, save the text file, and attach it to your report. Logs include app actions, Android/device details, USB permission and storage errors; no calculator file contents are collected.
+
+          If Android reports a signing conflict with an older test build, export any useful debug log before uninstalling the old app, then install this APK.
+          NOTES
+          gh release create "$tag" dist/EndraLink.apk dist/EndraLink.apk.sha256 --target "$GITHUB_SHA" --title "EndraLink $VERSION — testing build" --notes-file release-notes.md --latest
