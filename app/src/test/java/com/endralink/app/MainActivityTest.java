@@ -10,6 +10,8 @@ import android.widget.Button;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.Robolectric;
+import org.robolectric.RuntimeEnvironment;
+import org.robolectric.Shadows;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
 import org.robolectric.android.controller.ActivityController;
@@ -21,6 +23,8 @@ import static org.junit.Assert.*;
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 public class MainActivityTest {
     @Test public void homeOpensOnlyCg50AndBackReturnsHome() throws Exception {
+        Shadows.shadowOf(RuntimeEnvironment.getApplication()).grantPermissions(
+            "com.endralink.app.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION");
         try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class).setup()) {
             MainActivity a = controller.get();
             assertEquals(View.VISIBLE, a.findViewById(R.id.homePage).getVisibility());
