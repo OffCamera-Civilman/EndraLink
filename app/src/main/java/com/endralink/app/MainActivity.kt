@@ -89,7 +89,13 @@ class MainActivity : AppCompatActivity() {
         }, ContextCompat.RECEIVER_NOT_EXPORTED)
         ContextCompat.registerReceiver(this, receiver, IntentFilter(UsbManager.ACTION_USB_DEVICE_DETACHED),
             ContextCompat.RECEIVER_NOT_EXPORTED)
-        findViewById<TextView>(R.id.version).text = "0.1.5 • READ-ONLY PREVIEW"
+        findViewById<TextView>(R.id.version).text = "0.1.6 • fx-CG50 PREVIEW"
+        findViewById<Button>(R.id.openCg50).setOnClickListener {
+            DebugLog.event("TAP", "open_cg50_workspace")
+            findViewById<View>(R.id.cg50Workspace).visibility = View.VISIBLE
+            findViewById<View>(R.id.openCg50).visibility = View.GONE
+            findViewById<View>(R.id.homeArtwork).visibility = View.GONE
+        }
         findViewById<Button>(R.id.copy).isEnabled = false
         disconnect.isEnabled = false
         findViewById<Button>(R.id.openPhone).setOnClickListener {
