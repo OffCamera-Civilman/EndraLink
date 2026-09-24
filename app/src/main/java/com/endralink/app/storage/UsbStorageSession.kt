@@ -16,6 +16,7 @@ class UsbStorageSession(
 
     private var closed = false
     val volume: Fat16Volume
+    private val bot: ReadOnlyBot
 
     init {
         val endpoints = (0 until intf.endpointCount).map { intf.getEndpoint(it) }
@@ -28,7 +29,7 @@ class UsbStorageSession(
             throw InterfaceBusyException()
         }
         try {
-            val bot = ReadOnlyBot(object : ReadOnlyBot.BulkPipe {
+            bot = ReadOnlyBot(object : ReadOnlyBot.BulkPipe {
                 override fun send(data: ByteArray, offset: Int, length: Int): Int {
                     if (isCancelled()) throw IOException("Storage read cancelled.")
                     val result = connection.bulkTransfer(output, data, offset, length, 3000)
@@ -59,6 +60,14 @@ class UsbStorageSession(
             DebugLog.event("USB_RELEASE_AFTER_ERROR", "released=" + connection.releaseInterface(intf))
             throw e
         }
+    }
+
+    /** Only called for the explicit Eject action on the serialized USB worker. */
+    fun eject() {
+        if (closed) throw IOException("USB session already closed.")
+        DebugLog.event("EJECT_COMMAND_BEGIN", "ALLOW_MEDIUM_REMOVAL then START_STOP_UNIT LOEJ=1 START=0")
+        bot.eject()
+        DebugLog.event("EJECT_COMMAND_ACCEPTED")
     }
 
     /** Called on the serialized I/O worker after any pending read finishes. */

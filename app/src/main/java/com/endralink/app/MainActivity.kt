@@ -11,6 +11,7 @@ import android.provider.OpenableColumns
 import android.view.View
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
+import androidx.activity.OnBackPressedCallback
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
@@ -39,6 +40,7 @@ class MainActivity : AppCompatActivity() {
     @Volatile private var generation = 0
     @Volatile private var destroyed = false
     private var busy = false
+    private var ejecting = false
     private var storage: UsbStorageSession? = null
     private val folderStack = mutableListOf<Pair<String, Int>>()
     private val permissionAction get() = packageName + ".USB_PERMISSION"
@@ -70,6 +72,26 @@ class MainActivity : AppCompatActivity() {
         DebugLog.start(this)
         DebugLog.event("ACTIVITY_CREATE", "restored=" + (savedInstanceState != null))
         setContentView(R.layout.activity_main)
+        findViewById<ArtworkView>(R.id.homeArtwork).configure(R.drawable.hydra_home, 0f, 0.725f)
+        findViewById<ArtworkView>(R.id.workspaceHeader).configure(R.drawable.circuit_workspace, 0.07f, 0.225f)
+        findViewById<ArtworkView>(R.id.workspaceFooter).configure(R.drawable.circuit_workspace, 0.67f, 1f)
+        val navigation = object : OnBackPressedCallback(false) {
+            override fun handleOnBackPressed() {
+                findViewById<View>(R.id.workspacePage).visibility = View.GONE
+                findViewById<View>(R.id.homePage).visibility = View.VISIBLE
+                isEnabled = false
+                DebugLog.event("NAVIGATION", "home")
+            }
+        }
+        onBackPressedDispatcher.addCallback(this, navigation)
+        findViewById<Button>(R.id.homeFx).setOnClickListener {
+            findViewById<View>(R.id.homePage).visibility = View.GONE
+            findViewById<View>(R.id.workspacePage).visibility = View.VISIBLE
+            navigation.isEnabled = true
+            DebugLog.event("NAVIGATION", "fx_cg50")
+        }
+        findViewById<Button>(R.id.homeBack).setOnClickListener { navigation.handleOnBackPressed() }
+        if (savedInstanceState?.getBoolean("workspace") == true) findViewById<Button>(R.id.homeFx).performClick()
         WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightNavigationBars = false
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.page)) { view, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
@@ -89,13 +111,7 @@ class MainActivity : AppCompatActivity() {
         }, ContextCompat.RECEIVER_NOT_EXPORTED)
         ContextCompat.registerReceiver(this, receiver, IntentFilter(UsbManager.ACTION_USB_DEVICE_DETACHED),
             ContextCompat.RECEIVER_NOT_EXPORTED)
-        findViewById<TextView>(R.id.version).text = "0.1.6 • fx-CG50 PREVIEW"
-        findViewById<Button>(R.id.openCg50).setOnClickListener {
-            DebugLog.event("TAP", "open_cg50_workspace")
-            findViewById<View>(R.id.cg50Workspace).visibility = View.VISIBLE
-            findViewById<View>(R.id.openCg50).visibility = View.GONE
-            findViewById<View>(R.id.homeArtwork).visibility = View.GONE
-        }
+        findViewById<TextView>(R.id.version).text = "0.1.7 • READ-ONLY PREVIEW"
         findViewById<Button>(R.id.copy).isEnabled = false
         disconnect.isEnabled = false
         findViewById<Button>(R.id.openPhone).setOnClickListener {
@@ -118,8 +134,8 @@ class MainActivity : AppCompatActivity() {
             browseDirectory(folderStack.lastOrNull()?.second ?: 0)
         }
         disconnect.setOnClickListener {
-            DebugLog.event("TAP", "disconnect")
-            closeSession("EndraLink USB connection closed. No files were changed.")
+            DebugLog.event("TAP", "eject")
+            ejectCalculator()
         }
         findViewById<Button>(R.id.exportLog).setOnClickListener { requestLogExport() }
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this,
@@ -265,15 +281,71 @@ class MainActivity : AppCompatActivity() {
         progress.isIndeterminate = true
         progress.visibility = if (busy) View.VISIBLE else View.GONE
         connect.isEnabled = !busy && connection == null
-        disconnect.isEnabled = busy || connection != null
+        disconnect.isEnabled = !ejecting && (busy || connection != null)
         findViewById<Button>(R.id.browse).isEnabled = !busy && connection != null
         findViewById<Button>(R.id.upFolder).isEnabled = !busy && folderStack.isNotEmpty()
+    }
+
+    /** Send a real eject request before releasing ownership; report only confirmed outcomes. */
+    private fun ejectCalculator() {
+        if (ejecting) return
+        if (busy) {
+            closeSession("USB operation cancelled. Use Android storage settings to eject if still connected.")
+            return
+        }
+        val session = storage
+        val handle = connection
+        val device = activeDevice
+        if (session == null || handle == null || device == null) {
+            closeSession("App connection closed. To eject storage, use Android's system eject or connect and browse first.")
+            return
+        }
+        if (device.vendorId != 0x07cf || device.productId != 0x6102) {
+            closeSession("App connection closed. Use Android's system eject for this device.")
+            return
+        }
+        val request = generation
+        ejecting = true
+        setBusy(true)
+        status.text = "Requesting calculator eject…"
+        worker.execute {
+            var message = "Eject command accepted. Wait for the calculator to leave USB mode before unplugging."
+            try {
+                session.eject()
+            } catch (e: Exception) {
+                DebugLog.event("EJECT_ERROR", error = e)
+                message = "Eject could not be confirmed. Use Android's system eject if the calculator remains in USB mode."
+            } finally {
+                try {
+                    session.close()
+                } catch (e: Exception) {
+                    DebugLog.event("EJECT_RELEASE_ERROR", error = e)
+                    message = "USB cleanup could not be confirmed. Use Android's system eject."
+                }
+                try {
+                    handle.close()
+                    DebugLog.event("USB_HANDLE_CLOSED")
+                } catch (e: Exception) {
+                    DebugLog.event("USB_HANDLE_CLOSE_ERROR", error = e)
+                    message = "USB cleanup could not be confirmed. Use Android's system eject."
+                }
+            }
+            val outcome = message
+            main.post {
+                if (!destroyed && generation == request) {
+                    storage = null
+                    connection = null
+                    closeSession(outcome)
+                }
+            }
+        }
     }
 
     /** Release this app's handle and ignore stale callbacks; this is not filesystem eject. */
     private fun closeSession(message: String) {
         DebugLog.event("SESSION_CLOSE", "id=" + generation + " reason=" + message)
         generation++
+        ejecting = false
         permissionIntent?.cancel()
         permissionIntent = null
         pendingDevice = null
@@ -295,6 +367,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun checkAttachment() {
         val tracked = activeDevice ?: pendingDevice ?: return
+        if (ejecting) {
+            DebugLog.event("EJECT_ATTACHMENT", "attached=" + isAttached(tracked))
+            return
+        }
         if (!isAttached(tracked)) closeSession("USB device disconnected. Reconnect and tap Connect.")
     }
 
@@ -506,6 +582,11 @@ class MainActivity : AppCompatActivity() {
                 main.post { Toast.makeText(exportContext, "Could not save the debug log. Please try another location.", Toast.LENGTH_LONG).show() }
             }
         }, "EndraLink-log-export").start()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean("workspace", findViewById<View>(R.id.workspacePage).visibility == View.VISIBLE)
+        super.onSaveInstanceState(outState)
     }
 
     override fun onPause() {

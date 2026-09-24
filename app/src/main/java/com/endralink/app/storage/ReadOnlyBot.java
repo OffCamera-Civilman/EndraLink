@@ -4,7 +4,7 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
-/** USB Bulk-Only transport restricted to read/diagnostic SCSI commands on LUN 0. */
+/** USB Bulk-Only transport restricted to read/diagnostic commands and explicit media eject on LUN 0. */
 public final class ReadOnlyBot implements Fat16Volume.SectorReader {
     public interface BulkPipe {
         int send(byte[] data, int offset, int length) throws IOException;
@@ -15,6 +15,7 @@ public final class ReadOnlyBot implements Fat16Volume.SectorReader {
     private int tag;
     private long sectors;
     private boolean broken;
+    private boolean ejected;
 
     public ReadOnlyBot(BulkPipe pipe) { this.pipe = pipe; }
 
@@ -48,11 +49,29 @@ public final class ReadOnlyBot implements Fat16Volume.SectorReader {
         return command(cdb, 512);
     }
 
-    /** Package-private for transport fixtures. Reject all opcodes except TUR, sense, capacity, READ(10). */
+    /** Allow removal and request STOP with LOEJ; never sends file data or a storage write. */
+    public void eject() throws IOException {
+        try {
+            command(new byte[]{0x1e,0,0,0,0,0}, 0);
+        } catch (CommandFailed unsupported) {
+            byte[] sense = command(new byte[]{3,0,0,0,18,0}, 18);
+            if ((sense[2] & 15) != 5) throw unsupported;
+            // Some USB storage devices do not implement PREVENT/ALLOW MEDIUM REMOVAL.
+        }
+        command(new byte[]{0x1b,0,0,0,2,0}, 0);
+        ejected = true;
+    }
+
+    /** Package-private for transport fixtures. Allow read commands and only the exact non-writing eject CDBs. */
     byte[] command(byte[] cdb, int length) throws IOException {
         if (broken) throw new IOException("USB protocol lost synchronization. Disconnect and reconnect.");
+        if (ejected) throw new IOException("Calculator was ejected. Reconnect before reading.");
+        if (cdb.length == 0 || cdb.length > 16) throw new IOException("Invalid SCSI command length.");
         int op = cdb[0] & 255;
-        if (!(op == 0 || op == 3 || op == 0x25 || op == 0x28) || length < 0 || length > 512)
+        boolean ejectCommand = length == 0 && (
+            java.util.Arrays.equals(cdb, new byte[]{0x1e,0,0,0,0,0}) ||
+            java.util.Arrays.equals(cdb, new byte[]{0x1b,0,0,0,2,0}));
+        if (!(op == 0 || op == 3 || op == 0x25 || op == 0x28 || ejectCommand) || length < 0 || length > 512)
             throw new IOException("Command blocked by read-only policy.");
         int requestTag = ++tag;
         ByteBuffer cbw = ByteBuffer.allocate(31).order(ByteOrder.LITTLE_ENDIAN);

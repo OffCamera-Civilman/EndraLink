@@ -1,29 +1,25 @@
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
-    android:id="@+id/page" android:layout_width="match_parent" android:layout_height="match_parent"
-    android:background="@color/navy" android:fillViewport="true">
-    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:orientation="vertical" android:padding="24dp">
-        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical">
-            <ImageView android:layout_width="64dp" android:layout_height="64dp"
-                android:src="@drawable/endralink_logo" android:contentDescription="EndraLink Hydra logo"/>
-            <LinearLayout android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
-                android:orientation="vertical" android:paddingStart="16dp" android:paddingEnd="0dp">
-                <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-                    android:text="EndraLink" android:textSize="30sp" android:textStyle="bold" android:textColor="@color/silver"/>
-                <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-                    android:text="YOUR CALCULATOR. CONNECTED." android:textSize="10sp" android:letterSpacing="0.10" android:textColor="@color/cyan"/>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/page" android:layout_width="match_parent" android:layout_height="match_parent" android:background="@color/navy">
+    <ScrollView android:id="@+id/homePage" android:layout_width="match_parent" android:layout_height="match_parent" android:fillViewport="true">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical">
+            <com.endralink.app.ArtworkView android:id="@+id/homeArtwork" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:padding="12dp" android:baselineAligned="false">
+                <Button android:id="@+id/homeFx" style="@style/TechButtonPrimary" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:minHeight="100dp" android:text="fx-CG50" android:contentDescription="Open fx-CG50 workspace"/>
+                <Button android:id="@+id/homeNspire" style="@style/TechButton" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:minHeight="100dp" android:layout_marginStart="8dp" android:text="TI-Nspire\nComing later" android:textSize="13sp" android:enabled="false"/>
+                <Button android:id="@+id/homePrime" style="@style/TechButton" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:minHeight="100dp" android:layout_marginStart="8dp" android:text="HP Prime\nComing later" android:textSize="13sp" android:enabled="false"/>
             </LinearLayout>
+            <Button android:id="@+id/homeDonate" style="@style/TechButton" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginStart="12dp" android:layout_marginEnd="12dp" android:text="♡ Donate — coming later" android:enabled="false"/>
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:padding="16dp" android:gravity="center" android:text="EndraLink 0.1.7 • YOUR CALCULATOR. CONNECTED." android:textColor="@color/muted" android:textSize="11sp"/>
         </LinearLayout>
-        <View android:layout_width="match_parent" android:layout_height="3dp" android:layout_marginTop="20dp"
-            android:layout_marginBottom="20dp" android:background="@drawable/accent_line"/>
+    </ScrollView>
+<ScrollView
+    android:id="@+id/workspacePage" android:layout_width="match_parent" android:layout_height="match_parent"
+    android:background="@color/navy" android:visibility="gone" android:fillViewport="true">
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="vertical" android:padding="16dp">
+        <Button android:id="@+id/homeBack" style="@style/TechButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="‹ Home"/>
+        <com.endralink.app.ArtworkView android:id="@+id/workspaceHeader" android:layout_width="match_parent" android:layout_height="wrap_content"/>
         <TextView android:id="@+id/version" android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:text="0.1.6 • fx-CG50 PREVIEW" android:textSize="12sp" android:letterSpacing="0.08" android:textColor="@color/cyan"/>
-        <ImageView android:id="@+id/homeArtwork" android:layout_width="match_parent" android:layout_height="240dp" android:layout_marginTop="12dp" android:src="@drawable/endralink_logo" android:scaleType="centerCrop" android:contentDescription="EndraLink calculator portal artwork"/>
-        <com.google.android.material.button.MaterialButton android:id="@+id/openCg50" style="@style/EndraButton" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp" android:text="fx-CG50 — Open workspace"/>
-        <com.google.android.material.button.MaterialButton style="@style/EndraOutline" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="TI-Nspire — Coming later" android:enabled="false"/>
-        <com.google.android.material.button.MaterialButton style="@style/EndraOutline" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="HP Prime — Coming later" android:enabled="false"/>
-        <com.google.android.material.button.MaterialButton style="@style/EndraOutline" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Donate / Inspire — Coming later" android:enabled="false"/>
-        <LinearLayout android:id="@+id/cg50Workspace" android:layout_width="match_parent" android:layout_height="wrap_content" android:visibility="gone" android:orientation="vertical">
+            android:text="0.1.7 • READ-ONLY PREVIEW" android:textSize="12sp" android:letterSpacing="0.08" android:textColor="@color/cyan"/>
         <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp"
             android:background="@drawable/panel" android:padding="20dp" android:orientation="vertical">
             <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="USB CONNECTION"
@@ -37,9 +33,9 @@
                 android:layout_width="match_parent" android:layout_height="4dp" android:layout_marginTop="16dp"
                 android:indeterminateTint="@color/cyan" android:visibility="gone"/>
         </LinearLayout>
-        <com.google.android.material.button.MaterialButton android:id="@+id/connect" style="@style/EndraButton"
+        <Button android:id="@+id/connect" style="@style/TechButtonPrimary"
             android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="16dp" android:text="Connect fx-CG50"/>
-        <com.google.android.material.button.MaterialButton android:id="@+id/browse" style="@style/EndraOutline"
+        <Button android:id="@+id/browse" style="@style/TechButton"
             android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Browse calculator" android:enabled="false"/>
         <LinearLayout android:id="@+id/browserPanel" android:layout_width="match_parent" android:layout_height="wrap_content"
             android:layout_marginTop="16dp" android:background="@drawable/panel" android:padding="16dp" android:orientation="vertical" android:visibility="gone">
@@ -47,26 +43,28 @@
                 android:textColor="@color/cyan" android:textSize="12sp"/>
             <TextView android:id="@+id/folderPath" android:layout_width="match_parent" android:layout_height="wrap_content"
                 android:layout_marginTop="8dp" android:text="/" android:textSize="18sp" android:textColor="@color/silver"/>
-            <com.google.android.material.button.MaterialButton android:id="@+id/upFolder" style="@style/EndraOutline"
+            <Button android:id="@+id/upFolder" style="@style/TechButton"
                 android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Parent folder"/>
             <LinearLayout android:id="@+id/fileList" android:layout_width="match_parent" android:layout_height="wrap_content"
                 android:orientation="vertical"/>
         </LinearLayout>
         <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="24dp"
             android:text="ON YOUR ANDROID DEVICE" android:textSize="11sp" android:letterSpacing="0.12" android:textColor="@color/muted"/>
-        <com.google.android.material.button.MaterialButton android:id="@+id/openPhone" style="@style/EndraOutline"
+        <Button android:id="@+id/openPhone" style="@style/TechButton"
             android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Choose local file"/>
         <TextView android:id="@+id/progressText" android:layout_width="match_parent" android:layout_height="wrap_content"
             android:text="No local file selected" android:textColor="@color/muted" android:paddingBottom="8dp"/>
-        <com.google.android.material.button.MaterialButton android:id="@+id/copy" style="@style/EndraButton"
+        <Button android:id="@+id/copy" style="@style/TechButtonPrimary"
             android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Transfer — coming next" android:enabled="false"/>
-        <com.google.android.material.button.MaterialButton android:id="@+id/eject" style="@style/EndraOutline"
-            android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Disconnect USB" android:enabled="false"/>
-        <com.google.android.material.button.MaterialButton android:id="@+id/exportLog" style="@style/EndraOutline"
+        <Button android:id="@+id/eject" style="@style/TechButton"
+            android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Eject calculator" android:enabled="false"/>
+        <Button android:id="@+id/exportLog" style="@style/TechButton"
             android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Export debug log"/>
         <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp"
             android:text="Read-only browsing. No calculator files are created, changed, or deleted."
             android:textSize="12sp" android:gravity="center" android:textColor="@color/muted" android:paddingBottom="16dp"/>
-        </LinearLayout>
+        <com.endralink.app.ArtworkView android:id="@+id/workspaceFooter" android:layout_width="match_parent" android:layout_height="wrap_content"/>
     </LinearLayout>
 </ScrollView>
+
+</FrameLayout>

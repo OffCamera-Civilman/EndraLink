@@ -39,6 +39,12 @@ jobs:
         with:
           name: EndraLink-apk
           path: dist/
+      - name: Upload screen previews
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: EndraLink-screen-previews
+          path: app/build/reports/screenshots/
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4

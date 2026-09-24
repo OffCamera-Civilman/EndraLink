@@ -30,7 +30,7 @@ The multi-headed hydra represents EndraLink's goal: one application connecting t
 
 ## Project status
 
-EndraLink is in the early stages of development. Architecture, supported connection methods, features, and compatibility details will be documented as the project develops.
+EndraLink includes an illustrated Hydra cavern home screen, a circuit-themed fx-CG50 workspace, read-only FAT16 browsing, and exportable diagnostics. TI-Nspire, HP Prime, and Donate are disabled until future releases. Version 0.1.7 adds an explicit calculator eject request; hardware testing is still required to confirm calculator-specific behavior.
 
 ## Contributing
 
@@ -40,15 +40,22 @@ Contributions and testing will be welcome once the initial project structure and
 
 A license has not yet been selected. Until one is added, all rights are reserved by the project owner.
 
+## Build tools and SDK
+
+- [Android Studio and Android SDK](https://developer.android.com/studio)
+- Compile/target SDK: Android API 35; minimum: API 26 (Android 8.0).
+- JDK 17, Gradle 8.9. CI runs unit tests, APK assembly, and Android lint before publishing.
+- [Build results](https://github.com/brandonendall/EndraLink/actions/workflows/android.yml)
+
 ## Download Android APK
 
-**[Download EndraLink 0.1.6 APK](https://github.com/brandonendall/EndraLink/releases/download/v0.1.6/EndraLink.apk)**
+**[Download EndraLink 0.1.7 APK](https://github.com/brandonendall/EndraLink/releases/download/v0.1.7/EndraLink.apk)**
 
 Latest-release fallback: **[EndraLink.apk](https://github.com/brandonendall/EndraLink/releases/latest/download/EndraLink.apk)**
 
 This public link downloads the APK directly—no GitHub account or ZIP extraction needed. Share it with anyone testing EndraLink. Future successful, versioned builds on `main` publish here automatically.
 
-Requires Android 8.0 or newer. This is a **debug testing build** with fx-CG50 workspace and read-only calculator browsing; calculator file transfers are not enabled yet. TI-Nspire, HP Prime, Donate/Inspire remain disabled for later releases. The fx-CG50 path is the active calculator workspace.
+Requires Android 8.0 or newer. This is a **debug testing build** with fx-CG50 workspace and read-only calculator browsing; calculator file transfers are not enabled yet. TI-Nspire, HP Prime, Donate remain disabled for later releases. The fx-CG50 path is the active calculator workspace.
 
 Open the downloaded APK on Android and allow installation from your browser when asked. If updating an older test build fails because its signing key differs, export any useful logs, uninstall the old app, then install this APK.
 

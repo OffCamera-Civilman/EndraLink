@@ -81,4 +81,21 @@ public class ReadOnlyBotTest {
         Pipe p=new Pipe();ReadOnlyBot b=new ReadOnlyBot(p);b.initialize();p.shortData=true;
         failIO(()->b.readSector(0));
     }
+    @Test public void ejectSendsOnlyAllowAndStopAndBlocksFurtherReads() throws Exception {
+        Pipe p=new Pipe();ReadOnlyBot b=new ReadOnlyBot(p);b.initialize();b.eject();
+        assertEquals(Arrays.asList(0,0x25,0x1e,0x1b),p.commands);
+        assertEquals(0,ByteBuffer.wrap(p.cbw).order(ByteOrder.LITTLE_ENDIAN).getInt(8));
+        assertEquals(6,p.cbw[14]);assertEquals(2,p.cbw[19]);
+        failIO(()->b.readSector(0));assertEquals(4,p.commands.size());
+    }
+    @Test public void rejectsOtherStartStopVariants() throws Exception {
+        Pipe p=new Pipe();ReadOnlyBot b=new ReadOnlyBot(p);
+        failIO(()->b.command(new byte[]{0x1b,0,0,0,1,0},0));
+        failIO(()->b.command(new byte[]{0x1b,0,0,0,2,0},512));
+        assertTrue(p.commands.isEmpty());
+    }
+    @Test public void ejectDoesNotReportSuccessOnProtocolError() throws Exception {
+        Pipe p=new Pipe();ReadOnlyBot b=new ReadOnlyBot(p);b.initialize();p.badTag=true;
+        failIO(b::eject);assertEquals(Arrays.asList(0,0x25,0x1e),p.commands);
+    }
 }
