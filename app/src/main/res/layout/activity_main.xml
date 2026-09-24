@@ -18,7 +18,7 @@
             android:layout_marginBottom="20dp" android:background="@drawable/accent_line"/>
         <TextView android:id="@+id/version" android:layout_width="match_parent" android:layout_height="wrap_content"
             android:text="0.1.6 • fx-CG50 PREVIEW" android:textSize="12sp" android:letterSpacing="0.08" android:textColor="@color/cyan"/>
-        <ImageView android:id="@+id/homeArtwork" android:layout_width="match_parent" android:layout_height="240dp" android:layout_marginTop="12dp" android:src="@drawable/endralink_hydra_home" android:scaleType="centerCrop" android:contentDescription="EndraLink calculator portal artwork"/>
+        <ImageView android:id="@+id/homeArtwork" android:layout_width="match_parent" android:layout_height="240dp" android:layout_marginTop="12dp" android:src="@drawable/endralink_logo" android:scaleType="centerCrop" android:contentDescription="EndraLink calculator portal artwork"/>
         <com.google.android.material.button.MaterialButton android:id="@+id/openCg50" style="@style/EndraButton" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp" android:text="fx-CG50 — Open workspace"/>
         <com.google.android.material.button.MaterialButton style="@style/EndraOutline" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="TI-Nspire — Coming later" android:enabled="false"/>
         <com.google.android.material.button.MaterialButton style="@style/EndraOutline" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="HP Prime — Coming later" android:enabled="false"/>
