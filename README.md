@@ -42,11 +42,13 @@ A license has not yet been selected. Until one is added, all rights are reserved
 
 ## Download Android APK
 
-**[Download the latest EndraLink APK](https://github.com/brandonendall/EndraLink/releases/latest/download/EndraLink.apk)**
+**[Download EndraLink 0.1.6 APK](https://github.com/brandonendall/EndraLink/releases/download/v0.1.6/EndraLink.apk)**
+
+Latest-release fallback: **[EndraLink.apk](https://github.com/brandonendall/EndraLink/releases/latest/download/EndraLink.apk)**
 
 This public link downloads the APK directly—no GitHub account or ZIP extraction needed. Share it with anyone testing EndraLink. Future successful, versioned builds on `main` publish here automatically.
 
-Requires Android 8.0 or newer. This is a **debug testing build** with read-only fx-CG50 browsing; calculator file transfers are not enabled yet. TI-Nspire, HP Prime, donations, and the illustrated screens are planned for later.
+Requires Android 8.0 or newer. This is a **debug testing build** with fx-CG50 workspace and read-only calculator browsing; calculator file transfers are not enabled yet. TI-Nspire, HP Prime, Donate/Inspire remain disabled for later releases. The fx-CG50 path is the active calculator workspace.
 
 Open the downloaded APK on Android and allow installation from your browser when asked. If updating an older test build fails because its signing key differs, export any useful logs, uninstall the old app, then install this APK.
 
