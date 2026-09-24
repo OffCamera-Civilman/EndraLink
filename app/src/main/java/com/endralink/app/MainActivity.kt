@@ -111,7 +111,7 @@ class MainActivity : AppCompatActivity() {
         }, ContextCompat.RECEIVER_NOT_EXPORTED)
         ContextCompat.registerReceiver(this, receiver, IntentFilter(UsbManager.ACTION_USB_DEVICE_DETACHED),
             ContextCompat.RECEIVER_NOT_EXPORTED)
-        findViewById<TextView>(R.id.version).text = "0.1.7 • READ-ONLY PREVIEW"
+        findViewById<TextView>(R.id.version).text = "0.1.8 • READ-ONLY PREVIEW"
         findViewById<Button>(R.id.copy).isEnabled = false
         disconnect.isEnabled = false
         findViewById<Button>(R.id.openPhone).setOnClickListener {
