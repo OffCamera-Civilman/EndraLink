@@ -46,6 +46,7 @@ class MainActivity : AppCompatActivity() {
     private var busy = false
     private var ejecting = false
     private var transferring = false
+    private var pendingTransferAfterConnect = false
     private var transferTotalItems = 0
     private var storage: UsbStorageSession? = null
     private val transferChannelId = "endralink_transfers"
@@ -302,6 +303,10 @@ class MainActivity : AppCompatActivity() {
                     disconnect.isEnabled = true
                     status.text = "USB connection open"
                     details.text = describe(device) + "\nPermission granted. Select files and transfer directly, or Browse calculator to choose a folder."
+                    if (pendingTransferAfterConnect && selectedFiles.isNotEmpty()) {
+                        pendingTransferAfterConnect = false
+                        main.post { prepareStorageForTransfer(false) }
+                    }
                 }
             }
         }
@@ -329,7 +334,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.clearQueue).isEnabled = !busy && selectedFiles.isNotEmpty()
         findViewById<Button>(R.id.exportLog).isEnabled = !busy
         findViewById<Button>(R.id.homeBack).isEnabled = !busy
-        findViewById<Button>(R.id.copy).isEnabled = !busy && connection != null && selectedFiles.isNotEmpty()
+        findViewById<Button>(R.id.copy).isEnabled = !busy && selectedFiles.isNotEmpty()
         findViewById<ProgressBar>(R.id.transferProgress).visibility = if (transferring) View.VISIBLE else View.GONE
     }
 
@@ -413,6 +418,7 @@ class MainActivity : AppCompatActivity() {
         DebugLog.event("SESSION_CLOSE", "id=" + generation + " reason=" + message)
         generation++
         ejecting = false
+        pendingTransferAfterConnect = false
         permissionIntent?.cancel()
         permissionIntent = null
         pendingDevice = null
@@ -811,7 +817,7 @@ class MainActivity : AppCompatActivity() {
             list.addView(row)
         }
         findViewById<Button>(R.id.clearQueue).isEnabled = !busy && selectedFiles.isNotEmpty()
-        findViewById<Button>(R.id.copy).isEnabled = !busy && connection != null && selectedFiles.isNotEmpty()
+        findViewById<Button>(R.id.copy).isEnabled = !busy && selectedFiles.isNotEmpty()
     }
 
     private fun createTransferNotificationChannel() {
@@ -886,7 +892,10 @@ class MainActivity : AppCompatActivity() {
     private fun confirmTransfer() {
         if (busy || selectedFiles.isEmpty()) return
         if (connection == null) {
-            status.text = "Connect the fx-CG50 before transferring."
+            pendingTransferAfterConnect = true
+            status.text = "Connecting to fx-CG50 for transfer…"
+            details.text = "EndraLink will continue the transfer automatically after USB access is ready."
+            findCalculator()
             return
         }
         val session = storage
