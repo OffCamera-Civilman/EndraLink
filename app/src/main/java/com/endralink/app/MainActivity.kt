@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.*
 import android.provider.OpenableColumns
 import android.provider.DocumentsContract
+import android.provider.Settings
 import android.view.View
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
@@ -130,11 +131,16 @@ class MainActivity : AppCompatActivity() {
         disconnect.isEnabled = false
         createTransferNotificationChannel()
         findViewById<Button>(R.id.openPhone).setOnClickListener {
-            DebugLog.event("TAP", "choose_phone_tree")
-            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
-                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
-            }, 1004)
+            if (hasFullStorageAccess()) {
+                DebugLog.event("TAP", "phone_storage_root")
+                openFullStorageRoot()
+            } else {
+                DebugLog.event("TAP", "choose_phone_tree")
+                startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                        Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
+                }, 1004)
+            }
         }
         findViewById<Button>(R.id.phoneUp).setOnClickListener {
             if (phoneStack.size > 1) {
@@ -173,11 +179,8 @@ class MainActivity : AppCompatActivity() {
             ejectCalculator()
         }
         findViewById<Button>(R.id.exportLog).setOnClickListener { requestLogExport() }
-        restorePhoneTree()
-        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this,
-                Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1002)
-        }
+        restorePhoneAccess()
+        requestInitialPermissionsIfNeeded()
     }
 
     /** Require a SCSI Bulk-Only mass-storage interface and both bulk endpoint directions. */
@@ -560,12 +563,24 @@ class MainActivity : AppCompatActivity() {
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
     private fun formatMiB(bytes: Long): String = String.format(Locale.ROOT, "%.1f MiB", bytes / 1048576.0)
 
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 1002) {
+            requestAllFilesAccessIfNeeded()
+        } else if (requestCode == 1005 && hasFullStorageAccess()) {
+            openFullStorageRoot()
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         DebugLog.event("ACTIVITY_RESUME", "pending=" + (pendingDevice != null) + " busy=" + busy)
         pendingDevice?.let {
             logDevice("PERMISSION_ON_RESUME", it)
             if (usb.hasPermission(it)) finishPermission(it)
+        }
+        if (hasFullStorageAccess() && (phoneStack.isEmpty() || phoneStack.firstOrNull()?.first != "Internal storage")) {
+            openFullStorageRoot()
         }
         if (::usb.isInitialized) checkAttachment()
     }
@@ -595,10 +610,56 @@ class MainActivity : AppCompatActivity() {
         openPhoneTree(tree)
     }
 
-    private fun restorePhoneTree() {
+    private fun hasFullStorageAccess(): Boolean =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) Environment.isExternalStorageManager()
+        else ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+
+    private fun restorePhoneAccess() {
+        if (hasFullStorageAccess()) {
+            openFullStorageRoot()
+            return
+        }
         val saved = getSharedPreferences("endralink", MODE_PRIVATE).getString("phoneTree", null) ?: return
         runCatching { openPhoneTree(Uri.parse(saved)) }.onFailure {
             getSharedPreferences("endralink", MODE_PRIVATE).edit().remove("phoneTree").apply()
+        }
+    }
+
+    private fun openFullStorageRoot() {
+        val root = Environment.getExternalStorageDirectory()
+        phoneTreeUri = null
+        phoneStack.clear()
+        phoneStack.add("Internal storage" to Uri.fromFile(root))
+        findViewById<Button>(R.id.openPhone).text = "Storage root"
+        renderPhoneDirectory()
+    }
+
+    private fun requestInitialPermissionsIfNeeded() {
+        val prefs = getSharedPreferences("endralink", MODE_PRIVATE)
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
+            !prefs.getBoolean("askedNotifications", false)) {
+            prefs.edit().putBoolean("askedNotifications", true).apply()
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1002)
+            return
+        }
+        requestAllFilesAccessIfNeeded()
+    }
+
+    private fun requestAllFilesAccessIfNeeded() {
+        val prefs = getSharedPreferences("endralink", MODE_PRIVATE)
+        if (hasFullStorageAccess() || prefs.getBoolean("askedAllFiles", false)) return
+        prefs.edit().putBoolean("askedAllFiles", true).apply()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                    data = Uri.parse("package:" + packageName)
+                })
+            } catch (_: ActivityNotFoundException) {
+                startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+            }
+        } else {
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE), 1005)
         }
     }
 
@@ -612,6 +673,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun queryPhoneChildren(folder: Uri): List<PhoneEntry> {
+        if (folder.scheme == "file") {
+            val dir = folder.path?.let { java.io.File(it) } ?: return emptyList()
+            val children = dir.listFiles()?.toList() ?: emptyList()
+            return children
+                .filter { it.exists() && it.canRead() }
+                .map { PhoneEntry(Uri.fromFile(it), it.name, it.isDirectory, if (it.isFile) it.length() else 0L) }
+                .sortedWith(compareBy<PhoneEntry> { !it.directory }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.name })
+        }
         val tree = phoneTreeUri ?: return emptyList()
         val id = DocumentsContract.getDocumentId(folder)
         val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, id)
@@ -1026,6 +1095,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun openPhoneInput(uri: Uri): java.io.InputStream? =
+        if (uri.scheme == "file") uri.path?.let { java.io.File(it).inputStream() }
+        else contentResolver.openInputStream(uri)
+
     private fun transferPhoneItem(
         volume: Fat16Volume,
         targetCluster: Int,
@@ -1068,7 +1141,7 @@ class MainActivity : AppCompatActivity() {
                         "Transferring: " + path + "\n" + completed[0] + " files completed"
                 }
             }
-            val bytes = contentResolver.openInputStream(item.uri)?.use { input ->
+            val bytes = openPhoneInput(item.uri)?.use { input ->
                 val buffer = java.io.ByteArrayOutputStream()
                 val chunk = ByteArray(16 * 1024)
                 var total = 0
