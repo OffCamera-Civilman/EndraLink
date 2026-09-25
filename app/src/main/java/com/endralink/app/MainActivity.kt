@@ -805,36 +805,38 @@ class MainActivity : AppCompatActivity() {
 
     private fun preflightTransfer(session: UsbStorageSession) {
         if (busy || selectedFiles.isEmpty()) return
-        val files = selectedFiles.toList()
+        val items = selectedFiles.toList()
         val directoryCluster = folderStack.lastOrNull()?.second ?: 0
         val request = generation
         setBusy(true)
-        status.text = "Checking " + files.size + " file" + if (files.size == 1) "…" else "s…"
+        status.text = "Checking selected items…"
         worker.execute {
             try {
-                val conflicts = files.filter { session.volume.containsName(directoryCluster, it.name) }
+                val conflicts = mutableListOf<String>()
+                items.forEach { collectConflicts(session.volume, directoryCluster, it, it.name, 0, conflicts) }
                 main.post {
                     if (!destroyed && generation == request) {
                         setBusy(false)
                         val destination = "/" + folderStack.joinToString("/") { it.first }
                         if (conflicts.isNotEmpty()) {
-                            val names = conflicts.take(8).joinToString("\n") { "• " + it.name } +
-                                if (conflicts.size > 8) "\n• …and " + (conflicts.size - 8) + " more" else ""
+                            val names = conflicts.take(10).joinToString("\n") { "• " + it } +
+                                if (conflicts.size > 10) "\n• …and " + (conflicts.size - 10) + " more" else ""
                             AlertDialog.Builder(this)
                                 .setTitle("Overwrite existing files?")
-                                .setMessage(conflicts.size.toString() + " selected file" +
+                                .setMessage(conflicts.size.toString() + " file" +
                                     if (conflicts.size == 1) " already exists:\n\n" else "s already exist:\n\n" +
                                     names + "\n\nDestination: " + destination +
-                                    "\n\nOnly files with matching names will be replaced.")
-                                .setPositiveButton("Overwrite") { _, _ -> transferSelectedFiles(true) }
+                                    "\n\nExisting folders will be merged. Only matching files will be replaced.")
+                                .setPositiveButton("Overwrite files") { _, _ -> transferSelectedItems(true) }
                                 .setNegativeButton("Cancel", null)
                                 .show()
                         } else {
                             AlertDialog.Builder(this)
-                                .setTitle("Transfer selected files?")
-                                .setMessage(files.size.toString() + " file" +
-                                    if (files.size == 1) "" else "s" + "\n\nDestination: " + destination)
-                                .setPositiveButton("Transfer") { _, _ -> transferSelectedFiles(false) }
+                                .setTitle("Transfer selected items?")
+                                .setMessage(items.size.toString() + " selected item" +
+                                    if (items.size == 1) "" else "s" + "\n\nDestination: " + destination +
+                                    "\n\nFolders will be copied recursively.")
+                                .setPositiveButton("Transfer") { _, _ -> transferSelectedItems(false) }
                                 .setNegativeButton("Cancel", null)
                                 .show()
                         }
@@ -853,47 +855,54 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun transferSelectedFiles(overwriteConflicts: Boolean) {
+    private fun collectConflicts(
+        volume: Fat16Volume,
+        targetCluster: Int,
+        item: PendingItem,
+        path: String,
+        depth: Int,
+        conflicts: MutableList<String>
+    ) {
+        if (depth > 32) throw java.io.IOException("Folder nesting exceeds the 32-level safety limit.")
+        val existing = volume.findEntry(targetCluster, item.name)
+        if (item.directory) {
+            if (existing != null && !existing.directory)
+                throw java.io.IOException("Cannot copy folder " + path + " because a file with that name already exists.")
+            if (existing != null) {
+                queryPhoneChildren(item.uri).forEach { child ->
+                    collectConflicts(volume, existing.cluster,
+                        PendingItem(child.uri, child.name, child.directory),
+                        path + "/" + child.name, depth + 1, conflicts)
+                }
+            }
+        } else {
+            if (existing != null && existing.directory)
+                throw java.io.IOException("Cannot copy file " + path + " because a folder with that name already exists.")
+            if (existing != null) conflicts.add(path)
+        }
+        if (conflicts.size > 4096) throw java.io.IOException("Too many filename conflicts in one transfer.")
+    }
+
+    private fun transferSelectedItems(overwriteConflicts: Boolean) {
         if (busy || selectedFiles.isEmpty()) return
         val session = storage ?: return
-        val files = selectedFiles.toList()
+        val items = selectedFiles.toList()
         val directoryCluster = folderStack.lastOrNull()?.second ?: 0
         val request = generation
         transferring = true
         setTransferMode(true)
         setBusy(true)
-        status.text = "Transferring " + files.size + " file" + if (files.size == 1) "…" else "s…"
+        status.text = "Transferring selected items…"
         details.text = "Do not disconnect the calculator."
         worker.execute {
-            var completed = 0
+            val completed = intArrayOf(0, 0) // files, folders
+            val visited = intArrayOf(0)
             var currentName = ""
             try {
-                files.forEachIndexed { index, file ->
-                    currentName = file.name
-                    main.post {
-                        if (!destroyed && generation == request) {
-                            findViewById<TextView>(R.id.progressText).text =
-                                "Transferring " + (index + 1) + " of " + files.size + ": " + file.name
-                        }
-                    }
-                    val bytes = contentResolver.openInputStream(file.uri)?.use { input ->
-                        val buffer = java.io.ByteArrayOutputStream()
-                        val chunk = ByteArray(16 * 1024)
-                        var total = 0
-                        while (true) {
-                            val n = input.read(chunk)
-                            if (n < 0) break
-                            total += n
-                            if (total > 64 * 1024 * 1024)
-                                throw java.io.IOException(file.name + " exceeds the 64 MiB per-file safety limit.")
-                            buffer.write(chunk, 0, n)
-                        }
-                        buffer.toByteArray()
-                    } ?: throw java.io.IOException("Could not open " + file.name)
-
-                    session.volume.writeFile(directoryCluster, file.name, bytes, overwriteConflicts)
-                    completed++
-                    DebugLog.event("TRANSFER_FILE_SUCCESS", "index=" + index + " bytes=" + bytes.size)
+                items.forEach { item ->
+                    currentName = item.name
+                    transferPhoneItem(session.volume, directoryCluster, item, item.name,
+                        overwriteConflicts, 0, completed, visited, request)
                 }
 
                 val free = session.volume.freeBytes()
@@ -903,34 +912,88 @@ class MainActivity : AppCompatActivity() {
                         setTransferMode(false)
                         setBusy(false)
                         status.text = "Transfer complete"
-                        details.text = completed.toString() + " of " + files.size + " files transferred successfully."
+                        details.text = completed[0].toString() + " files and " + completed[1] +
+                            " folders transferred successfully."
                         findViewById<TextView>(R.id.progressText).text =
-                            "✓ Transfer complete: " + completed + " file" + if (completed == 1) "" else "s"
+                            "✓ Transfer complete: " + completed[0] + " files, " + completed[1] + " folders"
                         findViewById<TextView>(R.id.storageInfo).text =
                             "FAT16 • " + formatMiB(free) + " free / " + formatMiB(session.volume.capacityBytes) +
                                 if (session.volume.label.isNotBlank()) " • " + session.volume.label else ""
                         selectedFiles.clear()
                         renderLocalQueue()
-                        Toast.makeText(this, "Transfer complete: " + completed + " file" +
-                            if (completed == 1) "" else "s", Toast.LENGTH_LONG).show()
+                        renderPhoneDirectory()
+                        Toast.makeText(this, "Transfer complete", Toast.LENGTH_LONG).show()
                     }
                 }
             } catch (e: Exception) {
-                DebugLog.event("TRANSFER_ERROR", "completed=" + completed + " current=" + currentName, e)
+                DebugLog.event("TRANSFER_ERROR", "files=" + completed[0] + " folders=" + completed[1] +
+                    " current=" + currentName, e)
                 main.post {
                     if (!destroyed && generation == request) {
                         transferring = false
                         setTransferMode(false)
                         setBusy(false)
                         status.text = "Transfer stopped"
-                        details.text = completed.toString() + " of " + files.size +
-                            " files completed. " + (e.message ?: e.javaClass.simpleName)
-                        findViewById<TextView>(R.id.progressText).text =
-                            "Transfer stopped at " + currentName
+                        details.text = completed[0].toString() + " files and " + completed[1] +
+                            " folders completed. " + (e.message ?: e.javaClass.simpleName)
+                        findViewById<TextView>(R.id.progressText).text = "Transfer stopped at " + currentName
                         renderLocalQueue()
+                        renderPhoneDirectory()
                     }
                 }
             }
+        }
+    }
+
+    private fun transferPhoneItem(
+        volume: Fat16Volume,
+        targetCluster: Int,
+        item: PendingItem,
+        path: String,
+        overwriteConflicts: Boolean,
+        depth: Int,
+        completed: IntArray,
+        visited: IntArray,
+        request: Int
+    ) {
+        if (depth > 32) throw java.io.IOException("Folder nesting exceeds the 32-level safety limit.")
+        visited[0]++
+        if (visited[0] > 10000) throw java.io.IOException("Transfer exceeds the 10,000-item safety limit.")
+
+        if (item.directory) {
+            val destination = volume.ensureDirectory(targetCluster, item.name)
+            completed[1]++
+            val children = queryPhoneChildren(item.uri)
+            children.forEach { child ->
+                transferPhoneItem(volume, destination,
+                    PendingItem(child.uri, child.name, child.directory),
+                    path + "/" + child.name, overwriteConflicts, depth + 1,
+                    completed, visited, request)
+            }
+        } else {
+            main.post {
+                if (!destroyed && generation == request) {
+                    findViewById<TextView>(R.id.progressText).text =
+                        "Transferring: " + path + "\n" + completed[0] + " files completed"
+                }
+            }
+            val bytes = contentResolver.openInputStream(item.uri)?.use { input ->
+                val buffer = java.io.ByteArrayOutputStream()
+                val chunk = ByteArray(16 * 1024)
+                var total = 0
+                while (true) {
+                    val n = input.read(chunk)
+                    if (n < 0) break
+                    total += n
+                    if (total > 64 * 1024 * 1024)
+                        throw java.io.IOException(path + " exceeds the 64 MiB per-file safety limit.")
+                    buffer.write(chunk, 0, n)
+                }
+                buffer.toByteArray()
+            } ?: throw java.io.IOException("Could not open " + path)
+            volume.writeFile(targetCluster, item.name, bytes, overwriteConflicts)
+            completed[0]++
+            DebugLog.event("TRANSFER_FILE_SUCCESS", "bytes=" + bytes.size + " depth=" + depth)
         }
     }
 
