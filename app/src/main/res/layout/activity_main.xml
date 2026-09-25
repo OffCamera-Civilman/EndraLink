@@ -63,22 +63,30 @@
         </LinearLayout>
         <LinearLayout android:id="@+id/transferPanel" android:layout_width="match_parent" android:layout_height="wrap_content"
             android:layout_marginTop="24dp" android:background="@drawable/panel" android:padding="16dp" android:orientation="vertical">
-            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:text="ENDRALINK PHONE FILE MANAGER" android:textSize="11sp" android:letterSpacing="0.12" android:textColor="@color/muted"/>
-            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
-                <Button android:id="@+id/openPhone" style="@style/TechButton"
-                    android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="Choose phone folder"/>
-                <Button android:id="@+id/phoneUp" style="@style/TechButton"
-                    android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginStart="8dp"
-                    android:text="Up" android:enabled="false"/>
-                <Button android:id="@+id/clearQueue" style="@style/TechButton"
-                    android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginStart="8dp"
-                    android:text="Clear" android:enabled="false"/>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="horizontal" android:gravity="center_vertical">
+                <TextView android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
+                    android:text="ENDRALINK PHONE FILE MANAGER" android:textSize="11sp" android:letterSpacing="0.12" android:textColor="@color/muted"/>
+                <Button android:id="@+id/collapsePhoneStorage" style="@style/TechButton"
+                    android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Collapse"/>
             </LinearLayout>
-            <TextView android:id="@+id/phonePath" android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:text="Grant a phone folder once, then browse it here." android:textColor="@color/cyan" android:paddingTop="6dp" android:paddingBottom="6dp"/>
-            <LinearLayout android:id="@+id/phoneFileBrowser" android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:orientation="vertical"/>
+            <LinearLayout android:id="@+id/phoneStorageBody" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="vertical">
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+                    <Button android:id="@+id/openPhone" style="@style/TechButton"
+                        android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="Choose phone folder"/>
+                    <Button android:id="@+id/phoneUp" style="@style/TechButton"
+                        android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginStart="8dp"
+                        android:text="Up" android:enabled="false"/>
+                    <Button android:id="@+id/clearQueue" style="@style/TechButton"
+                        android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginStart="8dp"
+                        android:text="Clear" android:enabled="false"/>
+                </LinearLayout>
+                <TextView android:id="@+id/phonePath" android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:text="Grant a phone folder once, then browse it here." android:textColor="@color/cyan" android:paddingTop="6dp" android:paddingBottom="6dp"/>
+                <LinearLayout android:id="@+id/phoneFileBrowser" android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:orientation="vertical"/>
+            </LinearLayout>
             <TextView android:id="@+id/progressText" android:layout_width="match_parent" android:layout_height="wrap_content"
                 android:text="No files or folders selected" android:textColor="@color/muted" android:paddingTop="8dp" android:paddingBottom="8dp"/>
             <LinearLayout android:id="@+id/localFileList" android:layout_width="match_parent" android:layout_height="wrap_content"
