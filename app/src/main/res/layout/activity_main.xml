@@ -39,29 +39,41 @@
             android:layout_width="wrap_content" android:layout_gravity="center_horizontal" android:layout_height="wrap_content" android:text="Browse calculator" android:enabled="false"/>
         <LinearLayout android:id="@+id/browserPanel" android:layout_width="match_parent" android:layout_height="wrap_content"
             android:layout_marginTop="16dp" android:background="@drawable/panel" android:padding="16dp" android:orientation="vertical" android:visibility="gone">
-            <TextView android:id="@+id/storageInfo" android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:textColor="@color/cyan" android:textSize="12sp"/>
-            <TextView android:id="@+id/folderPath" android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:layout_marginTop="8dp" android:text="/" android:textSize="18sp" android:textColor="@color/silver"/>
-            <Button android:id="@+id/upFolder" style="@style/TechButton"
-                android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Parent folder"/>
-            <LinearLayout android:id="@+id/fileList" android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:orientation="vertical"/>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical">
+                <TextView android:id="@+id/storageInfo" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
+                    android:textColor="@color/cyan" android:textSize="12sp"/>
+                <Button android:id="@+id/collapseBrowser" style="@style/TechButton"
+                    android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Collapse"/>
+            </LinearLayout>
+            <LinearLayout android:id="@+id/browserBody" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical">
+                <TextView android:id="@+id/folderPath" android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp" android:text="/" android:textSize="18sp" android:textColor="@color/silver"/>
+                <Button android:id="@+id/upFolder" style="@style/TechButton"
+                    android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Parent folder"/>
+                <LinearLayout android:id="@+id/fileList" android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:orientation="vertical"/>
+            </LinearLayout>
         </LinearLayout>
-        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="24dp"
-            android:text="ON YOUR ANDROID DEVICE" android:textSize="11sp" android:letterSpacing="0.12" android:textColor="@color/muted"/>
-        <Button android:id="@+id/openPhone" style="@style/TechButton"
-            android:layout_width="wrap_content" android:layout_gravity="center_horizontal" android:layout_height="wrap_content" android:text="Choose local file"/>
-        <TextView android:id="@+id/progressText" android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:text="No local file selected" android:textColor="@color/muted" android:paddingBottom="8dp"/>
-        <Button android:id="@+id/copy" style="@style/TechButtonPrimary"
-            android:layout_width="wrap_content" android:layout_gravity="center_horizontal" android:layout_height="wrap_content" android:text="Transfer to calculator" android:enabled="false"/>
+        <LinearLayout android:id="@+id/transferPanel" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="24dp" android:background="@drawable/panel" android:padding="16dp" android:orientation="vertical">
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:text="TRANSFER FILE" android:textSize="11sp" android:letterSpacing="0.12" android:textColor="@color/muted"/>
+            <Button android:id="@+id/openPhone" style="@style/TechButton"
+                android:layout_width="wrap_content" android:layout_gravity="center_horizontal" android:layout_height="wrap_content" android:text="Choose local file"/>
+            <TextView android:id="@+id/progressText" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:text="No local file selected" android:textColor="@color/muted" android:paddingBottom="8dp"/>
+            <ProgressBar android:id="@+id/transferProgress" style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent" android:layout_height="6dp" android:indeterminate="true"
+                android:indeterminateTint="@color/cyan" android:visibility="gone"/>
+            <Button android:id="@+id/copy" style="@style/TechButtonPrimary"
+                android:layout_width="wrap_content" android:layout_gravity="center_horizontal" android:layout_height="wrap_content" android:text="Transfer to calculator" android:enabled="false"/>
+        </LinearLayout>
         <Button android:id="@+id/eject" style="@style/TechButton"
             android:layout_width="wrap_content" android:layout_gravity="center_horizontal" android:layout_height="wrap_content" android:text="Eject calculator" android:enabled="false"/>
         <Button android:id="@+id/exportLog" style="@style/TechButton"
             android:layout_width="wrap_content" android:layout_gravity="center_horizontal" android:layout_height="wrap_content" android:text="Export debug log"/>
         <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp"
-            android:text="Android → calculator transfer enabled. Existing calculator files are never overwritten."
+            android:text="Android → calculator transfer enabled. Existing files require confirmation before overwrite."
             android:textSize="12sp" android:gravity="center" android:textColor="@color/muted" android:paddingBottom="16dp"/>
         <com.endralink.app.ArtworkView android:id="@+id/workspaceFooter" android:layout_width="match_parent" android:layout_height="wrap_content"/>
     </LinearLayout>
