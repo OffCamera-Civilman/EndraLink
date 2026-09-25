@@ -58,9 +58,16 @@ public class Fat16VolumeTest {
         assertEquals(d.at(1)[first*2],d.at(33)[first*2]);
         failIO(()->v.writeFile(0,"hello.g3a",new byte[]{1}));
     }
-    @Test public void rejectsNamesOutsideSafe83Format() throws Exception {
-        Fat16Volume v=new Fat16Volume(disk());
-        failIO(()->v.writeFile(0,"this-name-is-too-long.g3a",new byte[]{1}));
+    @Test public void normalizesOrdinaryAndroidFileNames() throws Exception {
+        Disk d=disk();Fat16Volume v=new Fat16Volume(d);
+        String stored=v.writeFile(0,"gba new.txt",new byte[]{1,2,3});
+        assertEquals("GBA_NEW.TXT",stored);
+        assertEquals("GBA_NEW.TXT",v.list(0).get(0).name);
+    }
+    @Test public void truncatesLongNamesSafely() throws Exception {
+        Disk d=disk();Fat16Volume v=new Fat16Volume(d);
+        String stored=v.writeFile(0,"this-name-is-too-long.g3a",new byte[]{1});
+        assertEquals("THIS-NAM.G3A",stored);
     }
     @Test public void emptyRootAndLabel() throws Exception {
         Fat16Volume v=new Fat16Volume(disk());
