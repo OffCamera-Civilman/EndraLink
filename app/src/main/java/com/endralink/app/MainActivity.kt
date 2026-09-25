@@ -577,13 +577,13 @@ class MainActivity : AppCompatActivity() {
                     }
                     buffer.toByteArray()
                 } ?: throw java.io.IOException("Could not open the selected Android file.")
-                session.volume.writeFile(directoryCluster, name, bytes)
-                DebugLog.event("TRANSFER_SUCCESS", "bytes=" + bytes.size + " directoryCluster=" + directoryCluster)
+                val storedName = session.volume.writeFile(directoryCluster, name, bytes)
+                DebugLog.event("TRANSFER_SUCCESS", "bytes=" + bytes.size + " directoryCluster=" + directoryCluster + " storedName=" + storedName)
                 main.post {
                     if (!destroyed && generation == request) {
                         setBusy(false)
-                        status.text = "Transfer complete: " + name
-                        details.text = bytes.size.toString() + " bytes written. Browse the folder to verify the file."
+                        status.text = "Transfer complete: " + storedName
+                        details.text = bytes.size.toString() + " bytes written as " + storedName + ". Browse the folder to verify the file."
                         browseDirectory(directoryCluster)
                     }
                 }
