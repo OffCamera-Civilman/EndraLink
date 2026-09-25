@@ -57,6 +57,8 @@ class MainActivity : AppCompatActivity() {
     private var phoneTreeUri: Uri? = null
     private val phoneStack = mutableListOf<Pair<String, Uri>>()
     private val folderStack = mutableListOf<Pair<String, Int>>()
+    private var pendingCalculatorExport: Fat16Volume.Entry? = null
+    private var pendingCalculatorExportParentCluster: Int = 0
     private val permissionAction get() = packageName + ".USB_PERMISSION"
 
     /** Re-check actual USB permission; never trust permission flags from an incoming intent. */
@@ -153,6 +155,13 @@ class MainActivity : AppCompatActivity() {
             selectedFiles.clear()
             renderLocalQueue()
             renderPhoneDirectory()
+        }
+        findViewById<Button>(R.id.collapsePhoneStorage).setOnClickListener {
+            val body = findViewById<View>(R.id.phoneStorageBody)
+            val collapsed = body.visibility == View.VISIBLE
+            body.visibility = if (collapsed) View.GONE else View.VISIBLE
+            findViewById<Button>(R.id.collapsePhoneStorage).text = if (collapsed) "Expand" else "Collapse"
+            DebugLog.event("PHONE_BROWSER_COLLAPSE", "collapsed=" + collapsed)
         }
         connect.setOnClickListener { DebugLog.event("TAP", "connect"); findCalculator() }
         findViewById<Button>(R.id.browse).setOnClickListener {
@@ -340,6 +349,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.openPhone).isEnabled = !busy
         findViewById<Button>(R.id.phoneUp).isEnabled = !busy && phoneStack.size > 1
         findViewById<Button>(R.id.clearQueue).isEnabled = !busy && selectedFiles.isNotEmpty()
+        findViewById<Button>(R.id.collapsePhoneStorage).isEnabled = !busy
         findViewById<Button>(R.id.exportLog).isEnabled = !busy
         findViewById<Button>(R.id.homeBack).isEnabled = !busy
         findViewById<Button>(R.id.copy).isEnabled = !busy && selectedFiles.isNotEmpty()
@@ -725,16 +735,82 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun copyCalculatorEntryToPhone(volume: Fat16Volume, entry: Fat16Volume.Entry) {
-        if (phoneStack.isEmpty()) {
-            status.text = "Choose or grant phone storage access first."
+        pendingCalculatorExport = entry
+        pendingCalculatorExportParentCluster = folderStack.lastOrNull()?.second ?: 0
+        try {
+            if (entry.directory) {
+                startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                        Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
+                }, 1007)
+            } else {
+                startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = "application/octet-stream"
+                    putExtra(Intent.EXTRA_TITLE, entry.name)
+                }, 1006)
+            }
+        } catch (e: ActivityNotFoundException) {
+            pendingCalculatorExport = null
+            status.text = "No Android save location picker is available."
+            details.text = e.message ?: e.javaClass.simpleName
+        }
+    }
+
+    private fun saveCalculatorFileToUri(entry: Fat16Volume.Entry, parentCluster: Int, destination: Uri) {
+        val volume = storage?.volume ?: run {
+            status.text = "Calculator storage is no longer available."
             return
         }
-        val targetFolder = phoneStack.last().second
         val request = generation
         transferring = true
         setTransferMode(true)
         setBusy(true)
-        status.text = "Copying from calculator…"
+        status.text = "Copying " + entry.name + " to phone…"
+        details.text = "Do not disconnect the calculator."
+        worker.execute {
+            try {
+                val data = volume.readFile(parentCluster, entry.name)
+                val stream = contentResolver.openOutputStream(destination, "wt")
+                    ?: throw java.io.IOException("Could not open the selected phone destination.")
+                stream.use { it.write(data) }
+                main.post {
+                    if (!destroyed && generation == request) {
+                        transferring = false
+                        setTransferMode(false)
+                        setBusy(false)
+                        status.text = "Copy to phone complete"
+                        details.text = entry.name + " • " + data.size + " bytes"
+                        transferNotification(1, 1, entry.name, true)
+                        Toast.makeText(this, "Saved " + entry.name, Toast.LENGTH_LONG).show()
+                    }
+                }
+            } catch (e: Exception) {
+                main.post {
+                    if (!destroyed && generation == request) {
+                        transferring = false
+                        setTransferMode(false)
+                        setBusy(false)
+                        status.text = "Copy to phone failed"
+                        details.text = e.message ?: e.javaClass.simpleName
+                        transferNotificationFailed(e.message ?: "Calculator → phone copy failed")
+                    }
+                }
+            }
+        }
+    }
+
+    private fun saveCalculatorFolderToTree(entry: Fat16Volume.Entry, parentCluster: Int, tree: Uri) {
+        val volume = storage?.volume ?: run {
+            status.text = "Calculator storage is no longer available."
+            return
+        }
+        val root = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
+        val request = generation
+        transferring = true
+        setTransferMode(true)
+        setBusy(true)
+        status.text = "Copying folder " + entry.name + " to phone…"
         details.text = "Do not disconnect the calculator."
         worker.execute {
             val counts = intArrayOf(0, 0)
@@ -742,18 +818,17 @@ class MainActivity : AppCompatActivity() {
                 val total = countCalculatorItems(volume, entry)
                 transferTotalItems = total
                 main.post { transferNotification(0, total, "Calculator → phone: " + entry.name) }
-                copyCalculatorEntryRecursive(volume, folderStack.lastOrNull()?.second ?: 0,
-                    entry, targetFolder, counts, intArrayOf(0), request)
+                copyCalculatorEntryRecursive(volume, parentCluster, entry, root, counts, intArrayOf(0), request)
                 main.post {
                     if (!destroyed && generation == request) {
                         transferring = false
                         setTransferMode(false)
                         setBusy(false)
-                        status.text = "Copy to phone complete"
+                        status.text = "Folder copy complete"
                         details.text = counts[0].toString() + " files and " + counts[1] + " folders copied."
                         transferNotification(total, total,
                             counts[0].toString() + " files • " + counts[1] + " folders", true)
-                        renderPhoneDirectory()
+                        Toast.makeText(this, "Saved folder " + entry.name, Toast.LENGTH_LONG).show()
                     }
                 }
             } catch (e: Exception) {
@@ -894,6 +969,29 @@ class MainActivity : AppCompatActivity() {
         DebugLog.event("PICKER_RESULT", "request=" + requestCode + " result=" + resultCode)
         if (requestCode == 1003) {
             if (resultCode == Activity.RESULT_OK) data?.data?.let { exportLog(it) }
+            return
+        }
+        if (requestCode == 1006) {
+            val entry = pendingCalculatorExport
+            val parent = pendingCalculatorExportParentCluster
+            pendingCalculatorExport = null
+            if (resultCode == Activity.RESULT_OK && entry != null) {
+                data?.data?.let { saveCalculatorFileToUri(entry, parent, it) }
+            }
+            return
+        }
+        if (requestCode == 1007) {
+            val entry = pendingCalculatorExport
+            val parent = pendingCalculatorExportParentCluster
+            pendingCalculatorExport = null
+            if (resultCode == Activity.RESULT_OK && entry != null) {
+                val tree = data?.data
+                if (tree != null) {
+                    val takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    runCatching { contentResolver.takePersistableUriPermission(tree, takeFlags) }
+                    saveCalculatorFolderToTree(entry, parent, tree)
+                }
+            }
             return
         }
         if (requestCode != 1004 || resultCode != Activity.RESULT_OK) return
