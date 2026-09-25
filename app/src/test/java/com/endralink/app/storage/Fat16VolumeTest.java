@@ -80,6 +80,21 @@ public class Fat16VolumeTest {
         long after=v.freeBytes();
         assertEquals(1024,before-after);
     }
+    @Test public void createsAndReusesLongNamedDirectory() throws Exception {
+        Disk d=disk();Fat16Volume v=new Fat16Volume(d);
+        int cluster=v.ensureDirectory(0,"My Games Folder");
+        assertTrue(cluster>=2);
+        List<Fat16Volume.Entry> root=v.list(0);
+        assertEquals(1,root.size());assertTrue(root.get(0).directory);assertEquals("My Games Folder",root.get(0).name);
+        assertEquals(cluster,v.ensureDirectory(0,"My Games Folder"));
+        v.writeFile(cluster,"game one.g3a",new byte[]{1,2,3},false);
+        assertEquals("game one.g3a",v.list(cluster).get(0).name);
+    }
+    @Test public void directoryNameCannotReplaceAFile() throws Exception {
+        Disk d=disk();Fat16Volume v=new Fat16Volume(d);
+        v.writeFile(0,"Games",new byte[]{1},false);
+        failIO(()->v.ensureDirectory(0,"Games"));
+    }
     @Test public void emptyRootAndLabel() throws Exception {
         Fat16Volume v=new Fat16Volume(disk());
         assertEquals("ENDRALINK",v.label);assertEquals(TOTAL*512L,v.capacityBytes);assertTrue(v.list(0).isEmpty());
