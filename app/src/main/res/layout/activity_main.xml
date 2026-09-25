@@ -58,15 +58,22 @@
             android:layout_marginTop="24dp" android:background="@drawable/panel" android:padding="16dp" android:orientation="vertical">
             <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
                 android:text="TRANSFER FILE" android:textSize="11sp" android:letterSpacing="0.12" android:textColor="@color/muted"/>
-            <Button android:id="@+id/openPhone" style="@style/TechButton"
-                android:layout_width="wrap_content" android:layout_gravity="center_horizontal" android:layout_height="wrap_content" android:text="Choose local file"/>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+                <Button android:id="@+id/openPhone" style="@style/TechButton"
+                    android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="Add files"/>
+                <Button android:id="@+id/clearQueue" style="@style/TechButton"
+                    android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginStart="8dp"
+                    android:text="Clear" android:enabled="false"/>
+            </LinearLayout>
             <TextView android:id="@+id/progressText" android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:text="No local file selected" android:textColor="@color/muted" android:paddingBottom="8dp"/>
+                android:text="No files selected" android:textColor="@color/muted" android:paddingBottom="8dp"/>
+            <LinearLayout android:id="@+id/localFileList" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="vertical"/>
             <ProgressBar android:id="@+id/transferProgress" style="?android:attr/progressBarStyleHorizontal"
                 android:layout_width="match_parent" android:layout_height="6dp" android:indeterminate="true"
                 android:indeterminateTint="@color/cyan" android:visibility="gone"/>
             <Button android:id="@+id/copy" style="@style/TechButtonPrimary"
-                android:layout_width="wrap_content" android:layout_gravity="center_horizontal" android:layout_height="wrap_content" android:text="Transfer to calculator" android:enabled="false"/>
+                android:layout_width="wrap_content" android:layout_gravity="center_horizontal" android:layout_height="wrap_content" android:text="Transfer selected files" android:enabled="false"/>
         </LinearLayout>
         <Button android:id="@+id/eject" style="@style/TechButton"
             android:layout_width="wrap_content" android:layout_gravity="center_horizontal" android:layout_height="wrap_content" android:text="Eject calculator" android:enabled="false"/>
