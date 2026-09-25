@@ -75,7 +75,7 @@ jobs:
             exit 1
           fi
           cat > release-notes.md <<'NOTES'
-          Android testing build with a two-way EndraLink file manager: phone → fx-CG50 multi-file/folder transfer, calculator → phone copy, calculator rename/delete, new calculator files/folders, preserved long filenames, overwrite protection, storage free-space display, and transfer progress notifications.
+          Android testing build with a two-way EndraLink file manager: phone → fx-CG50 multi-file/folder transfer, calculator → phone copy with destination picker, calculator rename/delete, new calculator files/folders, collapsible phone/calculator browsers, preserved long filenames, overwrite protection, storage free-space display, and transfer progress notifications.
 
           Download **EndraLink.apk** below (Android 8.0 or newer). This is a debug APK, not a production release. The first phone-folder setup uses Android's folder permission screen; normal browsing then happens inside EndraLink.
 
