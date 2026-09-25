@@ -172,6 +172,12 @@ class MainActivity : AppCompatActivity() {
             findViewById<Button>(R.id.collapseBrowser).text = if (collapsed) "Expand" else "Collapse"
             DebugLog.event("BROWSER_COLLAPSE", "collapsed=" + collapsed)
         }
+        findViewById<Button>(R.id.newCalcFile).setOnClickListener {
+            promptCreateCalculatorItem(false)
+        }
+        findViewById<Button>(R.id.newCalcFolder).setOnClickListener {
+            promptCreateCalculatorItem(true)
+        }
         findViewById<Button>(R.id.copy).setOnClickListener {
             confirmTransfer()
         }
@@ -329,6 +335,8 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.browse).isEnabled = !busy && connection != null
         findViewById<Button>(R.id.upFolder).isEnabled = !busy && folderStack.isNotEmpty()
         findViewById<Button>(R.id.collapseBrowser).isEnabled = !busy
+        findViewById<Button>(R.id.newCalcFile).isEnabled = !busy && storage != null
+        findViewById<Button>(R.id.newCalcFolder).isEnabled = !busy && storage != null
         findViewById<Button>(R.id.openPhone).isEnabled = !busy
         findViewById<Button>(R.id.phoneUp).isEnabled = !busy && phoneStack.size > 1
         findViewById<Button>(R.id.clearQueue).isEnabled = !busy && selectedFiles.isNotEmpty()
@@ -489,7 +497,7 @@ class MainActivity : AppCompatActivity() {
                             details.text = "Storage is not ready to browse."
                             AlertDialog.Builder(this)
                                 .setTitle("Use direct calculator access?")
-                                .setMessage("Android's USB driver may be holding the calculator. Close other USB apps. If Android mounted the calculator, safely eject it in Android first and wait for any transfers to finish.\n\nDirect access detaches that driver so EndraLink can read storage. EndraLink will not write calculator files.")
+                                .setMessage("Android's USB driver may be holding the calculator. Close other USB apps. If Android mounted the calculator, safely eject it in Android first and wait for any transfers to finish.\n\nDirect access detaches that driver so EndraLink can manage calculator storage for browsing and file operations.")
                                 .setPositiveButton("Use direct access") { _, _ ->
                                     if (!destroyed && generation == request && isAttached(device)) {
                                         DebugLog.event("DIRECT_ACCESS_CONFIRMED")
@@ -552,11 +560,13 @@ class MainActivity : AppCompatActivity() {
                                 browseDirectory(entry.cluster)
                             }
                         } else {
-                            AlertDialog.Builder(this@MainActivity).setTitle(entry.name)
-                                .setMessage(entry.size.toString() + " bytes\n\nAndroid → calculator transfer is enabled. Calculator → Android export is planned for a later build.")
-                                .setPositiveButton("OK", null).show()
+                            showCalculatorEntryMenu(volume, entry)
                         }
                     }
+                }
+                setOnLongClickListener {
+                    if (!busy) showCalculatorEntryMenu(volume, entry)
+                    true
                 }
             })
             list.addView(View(this).apply {
@@ -564,6 +574,285 @@ class MainActivity : AppCompatActivity() {
                 layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1))
             })
         }
+    }
+
+    private fun showCalculatorEntryMenu(volume: Fat16Volume, entry: Fat16Volume.Entry) {
+        val actions = if (entry.directory)
+            arrayOf("Open", "Copy folder to phone", "Rename", "Delete empty folder")
+        else
+            arrayOf("Copy to phone", "Rename", "Delete")
+        AlertDialog.Builder(this)
+            .setTitle(entry.name)
+            .setItems(actions) { _, which ->
+                if (entry.directory) {
+                    when (which) {
+                        0 -> {
+                            if (folderStack.size < 32 && folderStack.none { it.second == entry.cluster }) {
+                                folderStack.add(entry.name to entry.cluster)
+                                browseDirectory(entry.cluster)
+                            }
+                        }
+                        1 -> copyCalculatorEntryToPhone(volume, entry)
+                        2 -> promptRenameCalculatorEntry(entry)
+                        3 -> confirmDeleteCalculatorEntry(entry)
+                    }
+                } else {
+                    when (which) {
+                        0 -> copyCalculatorEntryToPhone(volume, entry)
+                        1 -> promptRenameCalculatorEntry(entry)
+                        2 -> confirmDeleteCalculatorEntry(entry)
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun promptRenameCalculatorEntry(entry: Fat16Volume.Entry) {
+        val input = EditText(this).apply {
+            setText(entry.name)
+            setSelection(text.length)
+            singleLine = true
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Rename " + if (entry.directory) "folder" else "file")
+            .setView(input)
+            .setPositiveButton("Rename") { _, _ ->
+                val newName = input.text.toString()
+                val session = storage ?: return@setPositiveButton
+                val parent = folderStack.lastOrNull()?.second ?: 0
+                val request = generation
+                setBusy(true)
+                worker.execute {
+                    try {
+                        session.volume.renameEntry(parent, entry.name, newName)
+                        main.post {
+                            if (!destroyed && generation == request) {
+                                setBusy(false)
+                                status.text = "Renamed to " + newName
+                                browseDirectory(parent)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        main.post {
+                            if (!destroyed && generation == request) {
+                                setBusy(false)
+                                status.text = "Rename failed"
+                                details.text = e.message ?: e.javaClass.simpleName
+                            }
+                        }
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun confirmDeleteCalculatorEntry(entry: Fat16Volume.Entry) {
+        AlertDialog.Builder(this)
+            .setTitle("Delete " + entry.name + "?")
+            .setMessage(if (entry.directory)
+                "Only empty folders can be deleted. This cannot be undone."
+                else "This file will be permanently removed from the calculator.")
+            .setPositiveButton("Delete") { _, _ ->
+                val session = storage ?: return@setPositiveButton
+                val parent = folderStack.lastOrNull()?.second ?: 0
+                val request = generation
+                setBusy(true)
+                worker.execute {
+                    try {
+                        session.volume.deleteEntry(parent, entry.name)
+                        main.post {
+                            if (!destroyed && generation == request) {
+                                setBusy(false)
+                                status.text = "Deleted " + entry.name
+                                browseDirectory(parent)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        main.post {
+                            if (!destroyed && generation == request) {
+                                setBusy(false)
+                                status.text = "Delete failed"
+                                details.text = e.message ?: e.javaClass.simpleName
+                            }
+                        }
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun promptCreateCalculatorItem(directory: Boolean) {
+        val input = EditText(this).apply {
+            hint = if (directory) "Folder name" else "File name"
+            singleLine = true
+        }
+        AlertDialog.Builder(this)
+            .setTitle(if (directory) "New calculator folder" else "New calculator file")
+            .setView(input)
+            .setPositiveButton("Create") { _, _ ->
+                val name = input.text.toString()
+                val session = storage ?: return@setPositiveButton
+                val parent = folderStack.lastOrNull()?.second ?: 0
+                val request = generation
+                setBusy(true)
+                worker.execute {
+                    try {
+                        if (directory) session.volume.ensureDirectory(parent, name)
+                        else session.volume.writeFile(parent, name, ByteArray(0), false)
+                        main.post {
+                            if (!destroyed && generation == request) {
+                                setBusy(false)
+                                status.text = "Created " + name
+                                browseDirectory(parent)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        main.post {
+                            if (!destroyed && generation == request) {
+                                setBusy(false)
+                                status.text = "Create failed"
+                                details.text = e.message ?: e.javaClass.simpleName
+                            }
+                        }
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun copyCalculatorEntryToPhone(volume: Fat16Volume, entry: Fat16Volume.Entry) {
+        if (phoneStack.isEmpty()) {
+            status.text = "Choose or grant phone storage access first."
+            return
+        }
+        val targetFolder = phoneStack.last().second
+        val request = generation
+        transferring = true
+        setTransferMode(true)
+        setBusy(true)
+        status.text = "Copying from calculator…"
+        details.text = "Do not disconnect the calculator."
+        worker.execute {
+            val counts = intArrayOf(0, 0)
+            try {
+                val total = countCalculatorItems(volume, entry)
+                transferTotalItems = total
+                main.post { transferNotification(0, total, "Calculator → phone: " + entry.name) }
+                copyCalculatorEntryRecursive(volume, entry, targetFolder, counts, intArrayOf(0), request)
+                main.post {
+                    if (!destroyed && generation == request) {
+                        transferring = false
+                        setTransferMode(false)
+                        setBusy(false)
+                        status.text = "Copy to phone complete"
+                        details.text = counts[0].toString() + " files and " + counts[1] + " folders copied."
+                        transferNotification(total, total,
+                            counts[0].toString() + " files • " + counts[1] + " folders", true)
+                        renderPhoneDirectory()
+                    }
+                }
+            } catch (e: Exception) {
+                main.post {
+                    if (!destroyed && generation == request) {
+                        transferring = false
+                        setTransferMode(false)
+                        setBusy(false)
+                        status.text = "Copy to phone failed"
+                        details.text = e.message ?: e.javaClass.simpleName
+                        transferNotificationFailed(e.message ?: "Calculator → phone copy failed")
+                    }
+                }
+            }
+        }
+    }
+
+    private fun countCalculatorItems(volume: Fat16Volume, entry: Fat16Volume.Entry, depth: Int = 0): Int {
+        if (depth > 32) throw java.io.IOException("Folder nesting exceeds the 32-level safety limit.")
+        if (!entry.directory) return 1
+        var count = 1
+        volume.list(entry.cluster).forEach {
+            count += countCalculatorItems(volume, it, depth + 1)
+            if (count > 10000) throw java.io.IOException("Copy exceeds the 10,000-item safety limit.")
+        }
+        return count
+    }
+
+    private fun copyCalculatorEntryRecursive(
+        volume: Fat16Volume,
+        entry: Fat16Volume.Entry,
+        phoneParent: Uri,
+        counts: IntArray,
+        visited: IntArray,
+        request: Int,
+        depth: Int = 0
+    ) {
+        if (depth > 32) throw java.io.IOException("Folder nesting exceeds the 32-level safety limit.")
+        visited[0]++
+        if (visited[0] > 10000) throw java.io.IOException("Copy exceeds the 10,000-item safety limit.")
+        main.post {
+            if (!destroyed && generation == request)
+                transferNotification(visited[0] - 1, transferTotalItems, "Calculator → phone: " + entry.name)
+        }
+
+        if (entry.directory) {
+            val dest = ensurePhoneDirectory(phoneParent, entry.name)
+            counts[1]++
+            volume.list(entry.cluster).forEach {
+                copyCalculatorEntryRecursive(volume, it, dest, counts, visited, request, depth + 1)
+            }
+        } else {
+            val data = volume.readFile(folderClusterForEntry(entry), entry.name)
+            writePhoneFile(phoneParent, entry.name, data)
+            counts[0]++
+        }
+        main.post {
+            if (!destroyed && generation == request)
+                transferNotification(visited[0], transferTotalItems, "Calculator → phone: " + entry.name)
+        }
+    }
+
+    private fun folderClusterForEntry(entry: Fat16Volume.Entry): Int {
+        // readFile needs the entry's parent directory; use current folder for a top-level selection.
+        return folderStack.lastOrNull()?.second ?: 0
+    }
+
+    private fun findPhoneChild(parent: Uri, name: String): PhoneEntry? =
+        queryPhoneChildren(parent).firstOrNull { it.name.equals(name, ignoreCase = true) }
+
+    private fun ensurePhoneDirectory(parent: Uri, name: String): Uri {
+        val existing = findPhoneChild(parent, name)
+        if (existing != null) {
+            if (!existing.directory) throw java.io.IOException("A phone file named " + name + " already exists.")
+            return existing.uri
+        }
+        if (parent.scheme == "file") {
+            val dir = java.io.File(parent.path, name)
+            if (!dir.exists() && !dir.mkdirs()) throw java.io.IOException("Could not create phone folder " + name)
+            return Uri.fromFile(dir)
+        }
+        return DocumentsContract.createDocument(contentResolver, parent,
+            DocumentsContract.Document.MIME_TYPE_DIR, name)
+            ?: throw java.io.IOException("Could not create phone folder " + name)
+    }
+
+    private fun writePhoneFile(parent: Uri, name: String, data: ByteArray) {
+        val existing = findPhoneChild(parent, name)
+        if (existing != null && existing.directory)
+            throw java.io.IOException("A phone folder named " + name + " already exists.")
+        val target = if (existing != null) existing.uri else if (parent.scheme == "file") {
+            Uri.fromFile(java.io.File(parent.path, name))
+        } else {
+            DocumentsContract.createDocument(contentResolver, parent, "application/octet-stream", name)
+                ?: throw java.io.IOException("Could not create phone file " + name)
+        }
+        val stream = if (target.scheme == "file")
+            target.path?.let { java.io.FileOutputStream(java.io.File(it), false) }
+        else contentResolver.openOutputStream(target, "wt")
+        stream?.use { it.write(data) } ?: throw java.io.IOException("Could not write phone file " + name)
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
