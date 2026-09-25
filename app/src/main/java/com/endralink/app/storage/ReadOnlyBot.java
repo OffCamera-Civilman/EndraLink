@@ -4,13 +4,14 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
-/** USB Bulk-Only transport restricted to read/diagnostic commands and explicit media eject on LUN 0. */
-public final class ReadOnlyBot implements Fat16Volume.SectorReader {
+/** USB Bulk-Only transport for bounded single-sector reads/writes plus explicit media eject. */
+public final class ReadOnlyBot implements Fat16Volume.SectorReader, Fat16Volume.SectorWriter {
     public interface BulkPipe {
         int send(byte[] data, int offset, int length) throws IOException;
         int receive(byte[] data, int offset, int length) throws IOException;
         void clearInputHalt() throws IOException;
     }
+
     private final BulkPipe pipe;
     private int tag;
     private long sectors;
@@ -23,78 +24,126 @@ public final class ReadOnlyBot implements Fat16Volume.SectorReader {
     public void initialize() throws IOException {
         for (int attempt = 0; attempt < 3; attempt++) {
             try {
-                command(new byte[]{0,0,0,0,0,0}, 0);
+                commandIn(new byte[]{0,0,0,0,0,0}, 0);
                 break;
             } catch (CommandFailed e) {
-                byte[] sense = command(new byte[]{3,0,0,0,18,0}, 18);
+                byte[] sense = commandIn(new byte[]{3,0,0,0,18,0}, 18);
                 int key = sense[2] & 15;
-                if (attempt == 2 || (key != 6 && key != 2)) throw new IOException("Calculator not ready (SCSI sense " + key + "). Reconnect in USB Flash mode.");
+                if (attempt == 2 || (key != 6 && key != 2)) {
+                    throw new IOException("Calculator not ready (SCSI sense " + key + "). Reconnect in USB Flash mode.");
+                }
             }
         }
-        byte[] capacity = command(new byte[]{0x25,0,0,0,0,0,0,0,0,0}, 8);
+        byte[] capacity = commandIn(new byte[]{0x25,0,0,0,0,0,0,0,0,0}, 8);
         ByteBuffer b = ByteBuffer.wrap(capacity).order(ByteOrder.BIG_ENDIAN);
         long last = Integer.toUnsignedLong(b.getInt()), size = Integer.toUnsignedLong(b.getInt());
-        if (last == 0xffffffffL || size != 512) throw new IOException("Unsupported capacity or sector size: " + size + " bytes. This build requires 512-byte sectors.");
+        if (last == 0xffffffffL || size != 512) {
+            throw new IOException("Unsupported capacity or sector size: " + size + " bytes. This build requires 512-byte sectors.");
+        }
         sectors = last + 1;
     }
 
     @Override public long sectorCount() { return sectors; }
 
     @Override public byte[] readSector(long lba) throws IOException {
-        if (lba < 0 || lba >= sectors) throw new IOException("Read outside USB device.");
-        byte[] cdb = new byte[10];
-        cdb[0] = 0x28; // READ(10); there is deliberately no WRITE command.
-        ByteBuffer.wrap(cdb).order(ByteOrder.BIG_ENDIAN).putInt(2, (int)lba);
-        cdb[8] = 1;
-        return command(cdb, 512);
+        checkLba(lba);
+        byte[] cdb = sectorCdb(0x28, lba);
+        return commandIn(cdb, 512);
     }
 
-    /** Allow removal and request STOP with LOEJ; never sends file data or a storage write. */
+    @Override public void writeSector(long lba, byte[] data) throws IOException {
+        checkLba(lba);
+        if (data == null || data.length != 512) throw new IOException("Sector writes must be exactly 512 bytes.");
+        commandOut(sectorCdb(0x2a, lba), data);
+    }
+
+    private void checkLba(long lba) throws IOException {
+        if (lba < 0 || lba >= sectors) throw new IOException("Access outside USB device.");
+    }
+
+    private static byte[] sectorCdb(int op, long lba) {
+        byte[] cdb = new byte[10];
+        cdb[0] = (byte)op;
+        ByteBuffer.wrap(cdb).order(ByteOrder.BIG_ENDIAN).putInt(2, (int)lba);
+        cdb[8] = 1;
+        return cdb;
+    }
+
+    /** Allow removal and request STOP with LOEJ. */
     public void eject() throws IOException {
         try {
-            command(new byte[]{0x1e,0,0,0,0,0}, 0);
+            commandIn(new byte[]{0x1e,0,0,0,0,0}, 0);
         } catch (CommandFailed unsupported) {
-            byte[] sense = command(new byte[]{3,0,0,0,18,0}, 18);
+            byte[] sense = commandIn(new byte[]{3,0,0,0,18,0}, 18);
             if ((sense[2] & 15) != 5) throw unsupported;
-            // Some USB storage devices do not implement PREVENT/ALLOW MEDIUM REMOVAL.
         }
-        command(new byte[]{0x1b,0,0,0,2,0}, 0);
+        commandIn(new byte[]{0x1b,0,0,0,2,0}, 0);
         ejected = true;
     }
 
-    /** Package-private for transport fixtures. Allow read commands and only the exact non-writing eject CDBs. */
+    /** Kept package-private for transport fixtures; raw callers may only issue safe read/diagnostic/eject commands. */
     byte[] command(byte[] cdb, int length) throws IOException {
-        if (broken) throw new IOException("USB protocol lost synchronization. Disconnect and reconnect.");
-        if (ejected) throw new IOException("Calculator was ejected. Reconnect before reading.");
-        if (cdb.length == 0 || cdb.length > 16) throw new IOException("Invalid SCSI command length.");
+        return commandIn(cdb, length);
+    }
+
+    private byte[] commandIn(byte[] cdb, int length) throws IOException {
+        validateState(cdb);
         int op = cdb[0] & 255;
         boolean ejectCommand = length == 0 && (
             java.util.Arrays.equals(cdb, new byte[]{0x1e,0,0,0,0,0}) ||
             java.util.Arrays.equals(cdb, new byte[]{0x1b,0,0,0,2,0}));
-        if (!(op == 0 || op == 3 || op == 0x25 || op == 0x28 || ejectCommand) || length < 0 || length > 512)
-            throw new IOException("Command blocked by read-only policy.");
+        if (!(op == 0 || op == 3 || op == 0x25 || op == 0x28 || ejectCommand) || length < 0 || length > 512) {
+            throw new IOException("Command blocked by transfer policy.");
+        }
+        return transact(cdb, true, null, length);
+    }
+
+    private void commandOut(byte[] cdb, byte[] data) throws IOException {
+        validateState(cdb);
+        if ((cdb[0] & 255) != 0x2a || data.length != 512 || cdb.length != 10 || cdb[7] != 0 || cdb[8] != 1) {
+            throw new IOException("Only single-sector WRITE(10) commands are allowed.");
+        }
+        transact(cdb, false, data, data.length);
+    }
+
+    private void validateState(byte[] cdb) throws IOException {
+        if (broken) throw new IOException("USB protocol lost synchronization. Disconnect and reconnect.");
+        if (ejected) throw new IOException("Calculator was ejected. Reconnect before accessing storage.");
+        if (cdb == null || cdb.length == 0 || cdb.length > 16) throw new IOException("Invalid SCSI command length.");
+    }
+
+    private byte[] transact(byte[] cdb, boolean input, byte[] outbound, int length) throws IOException {
         int requestTag = ++tag;
         ByteBuffer cbw = ByteBuffer.allocate(31).order(ByteOrder.LITTLE_ENDIAN);
-        cbw.putInt(0x43425355).putInt(requestTag).putInt(length).put((byte)0x80).put((byte)0).put((byte)cdb.length).put(cdb);
+        cbw.putInt(0x43425355).putInt(requestTag).putInt(length).put((byte)(input ? 0x80 : 0x00))
+            .put((byte)0).put((byte)cdb.length).put(cdb);
         try {
             if (pipe.send(cbw.array(), 0, 31) != 31) throw new IOException("Incomplete USB command.");
             byte[] result = new byte[length];
             int count = 0;
-            while (count < length) {
-                int n = pipe.receive(result, count, length - count);
-                if (n < 0) { pipe.clearInputHalt(); break; }
-                if (n > length - count) throw new IOException("Invalid USB data length.");
-                if (n == 0) break;
-                count += n;
-                // A short data packet terminates the data phase.
-                if (count < length) break;
+            if (input) {
+                while (count < length) {
+                    int n = pipe.receive(result, count, length - count);
+                    if (n < 0) { pipe.clearInputHalt(); break; }
+                    if (n > length - count) throw new IOException("Invalid USB data length.");
+                    if (n == 0) break;
+                    count += n;
+                    if (count < length) break;
+                }
+            } else if (length > 0) {
+                int sent = pipe.send(outbound, 0, length);
+                if (sent != length) throw new IOException("Incomplete USB data write.");
+                count = length;
             }
+
             byte[] status = new byte[13];
             int n = pipe.receive(status, 0, 13);
             if (n < 0) { pipe.clearInputHalt(); n = pipe.receive(status, 0, 13); }
             if (n != 13) throw new IOException("Invalid USB command-status length.");
             ByteBuffer csw = ByteBuffer.wrap(status).order(ByteOrder.LITTLE_ENDIAN);
-            if (csw.getInt() != 0x53425355 || csw.getInt() != requestTag) throw new IOException("USB command-status signature/tag mismatch.");
+            if (csw.getInt() != 0x53425355 || csw.getInt() != requestTag) {
+                throw new IOException("USB command-status signature/tag mismatch.");
+            }
             long residue = Integer.toUnsignedLong(csw.getInt());
             int state = csw.get() & 255;
             if (residue > length || state > 2) throw new IOException("Invalid USB command status.");
@@ -112,6 +161,6 @@ public final class ReadOnlyBot implements Fat16Volume.SectorReader {
 
     private static final class CommandFailed extends IOException {
         private static final long serialVersionUID = 1L;
-        CommandFailed() { super("Calculator rejected a read-only command."); }
+        CommandFailed() { super("Calculator rejected a storage command."); }
     }
 }
