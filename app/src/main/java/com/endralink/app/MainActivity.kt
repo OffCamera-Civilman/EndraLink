@@ -742,7 +742,8 @@ class MainActivity : AppCompatActivity() {
                 val total = countCalculatorItems(volume, entry)
                 transferTotalItems = total
                 main.post { transferNotification(0, total, "Calculator → phone: " + entry.name) }
-                copyCalculatorEntryRecursive(volume, entry, targetFolder, counts, intArrayOf(0), request)
+                copyCalculatorEntryRecursive(volume, folderStack.lastOrNull()?.second ?: 0,
+                    entry, targetFolder, counts, intArrayOf(0), request)
                 main.post {
                     if (!destroyed && generation == request) {
                         transferring = false
@@ -783,6 +784,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun copyCalculatorEntryRecursive(
         volume: Fat16Volume,
+        calculatorParentCluster: Int,
         entry: Fat16Volume.Entry,
         phoneParent: Uri,
         counts: IntArray,
@@ -802,10 +804,10 @@ class MainActivity : AppCompatActivity() {
             val dest = ensurePhoneDirectory(phoneParent, entry.name)
             counts[1]++
             volume.list(entry.cluster).forEach {
-                copyCalculatorEntryRecursive(volume, it, dest, counts, visited, request, depth + 1)
+                copyCalculatorEntryRecursive(volume, entry.cluster, it, dest, counts, visited, request, depth + 1)
             }
         } else {
-            val data = volume.readFile(folderClusterForEntry(entry), entry.name)
+            val data = volume.readFile(calculatorParentCluster, entry.name)
             writePhoneFile(phoneParent, entry.name, data)
             counts[0]++
         }
@@ -813,11 +815,6 @@ class MainActivity : AppCompatActivity() {
             if (!destroyed && generation == request)
                 transferNotification(visited[0], transferTotalItems, "Calculator → phone: " + entry.name)
         }
-    }
-
-    private fun folderClusterForEntry(entry: Fat16Volume.Entry): Int {
-        // readFile needs the entry's parent directory; use current folder for a top-level selection.
-        return folderStack.lastOrNull()?.second ?: 0
     }
 
     private fun findPhoneChild(parent: Uri, name: String): PhoneEntry? =
@@ -841,9 +838,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun writePhoneFile(parent: Uri, name: String, data: ByteArray) {
         val existing = findPhoneChild(parent, name)
-        if (existing != null && existing.directory)
-            throw java.io.IOException("A phone folder named " + name + " already exists.")
-        val target = if (existing != null) existing.uri else if (parent.scheme == "file") {
+        if (existing != null) {
+            if (existing.directory) throw java.io.IOException("A phone folder named " + name + " already exists.")
+            throw java.io.IOException("A phone file named " + name + " already exists. Rename or remove it before copying.")
+        }
+        val target = if (parent.scheme == "file") {
             Uri.fromFile(java.io.File(parent.path, name))
         } else {
             DocumentsContract.createDocument(contentResolver, parent, "application/octet-stream", name)
