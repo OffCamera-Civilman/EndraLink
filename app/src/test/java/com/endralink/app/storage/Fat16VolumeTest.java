@@ -9,13 +9,17 @@ import static org.junit.Assert.*;
 /** Synthetic sector fixtures exercise filesystem boundaries without calculator hardware. */
 public class Fat16VolumeTest {
     private static final int TOTAL = 8192, ROOT = 65, DATA = 67;
-    private static final class Disk implements Fat16Volume.SectorReader {
+    private static final class Disk implements Fat16Volume.SectorReader, Fat16Volume.SectorWriter {
         final Map<Long, byte[]> sectors = new HashMap<>();
         long size = TOTAL;
         public long sectorCount() { return size; }
         public byte[] readSector(long lba) throws IOException {
             if (lba < 0 || lba >= size) throw new IOException("Fixture out of bounds");
             return sectors.getOrDefault(lba, new byte[512]);
+        }
+        public void writeSector(long lba, byte[] data) throws IOException {
+            if (lba < 0 || lba >= size || data == null || data.length != 512) throw new IOException("Fixture write out of bounds");
+            sectors.put(lba, Arrays.copyOf(data, data.length));
         }
         byte[] at(long lba) { return sectors.computeIfAbsent(lba, k -> new byte[512]); }
     }
@@ -41,6 +45,23 @@ public class Fat16VolumeTest {
     }
     private interface IoCall { void run() throws Exception; }
 
+    @Test public void createsFileWithoutOverwritingAndLinksBothFats() throws Exception {
+        Disk d=disk();Fat16Volume v=new Fat16Volume(d);
+        byte[] payload=new byte[700];for(int i=0;i<payload.length;i++)payload[i]=(byte)i;
+        v.writeFile(0,"HELLO.G3A",payload);
+        List<Fat16Volume.Entry> entries=v.list(0);
+        assertEquals(1,entries.size());assertEquals("HELLO.G3A",entries.get(0).name);assertEquals(700,entries.get(0).size);
+        int first=entries.get(0).cluster;assertTrue(first>=2);
+        int next=(d.at(1)[first*2]&255)|((d.at(1)[first*2+1]&255)<<8);
+        assertTrue(next>=2);
+        assertEquals(0xffff,(d.at(1)[next*2]&255)|((d.at(1)[next*2+1]&255)<<8));
+        assertEquals(d.at(1)[first*2],d.at(33)[first*2]);
+        failIO(()->v.writeFile(0,"hello.g3a",new byte[]{1}));
+    }
+    @Test public void rejectsNamesOutsideSafe83Format() throws Exception {
+        Fat16Volume v=new Fat16Volume(disk());
+        failIO(()->v.writeFile(0,"this-name-is-too-long.g3a",new byte[]{1}));
+    }
     @Test public void emptyRootAndLabel() throws Exception {
         Fat16Volume v=new Fat16Volume(disk());
         assertEquals("ENDRALINK",v.label);assertEquals(TOTAL*512L,v.capacityBytes);assertTrue(v.list(0).isEmpty());
