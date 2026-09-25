@@ -175,6 +175,63 @@ public final class Fat16Volume {
         return findExisting(directoryCluster, fileName) != null;
     }
 
+    /** Find a displayed entry by exact name, case-insensitively. */
+    public Entry findEntry(int directoryCluster, String name) throws IOException {
+        for (Entry entry : list(directoryCluster)) {
+            if (entry.name.equalsIgnoreCase(name)) return entry;
+        }
+        return null;
+    }
+
+    /**
+     * Return an existing matching directory or create one, preserving its long filename.
+     * New directories get one initialized data cluster containing . and .. entries.
+     */
+    public synchronized int ensureDirectory(int parentCluster, String directoryName) throws IOException {
+        if (writer == null) throw new IOException("This storage session does not permit writes.");
+        String preservedName = validateLongName(directoryName);
+        Existing existing = findExisting(parentCluster, preservedName);
+        if (existing != null) {
+            if (!existing.directory) throw new IOException("A file named " + preservedName + " already exists.");
+            return existing.cluster;
+        }
+
+        Set<String> aliases = shortAliases(parentCluster);
+        byte[] shortRaw = chooseShortAlias(preservedName, aliases);
+        boolean needsLfn = !displayShortName(shortRaw).equals(preservedName);
+        int lfnCount = needsLfn ? (preservedName.length() + 12) / 13 : 0;
+        List<Slot> targetSlots = findContiguousFreeSlots(parentCluster, lfnCount + 1);
+        List<Integer> free = findFreeClusters(1);
+        int cluster = free.get(0);
+
+        byte[] first = new byte[512];
+        byte[] dot = packAlias(".", "");
+        byte[] dotdot = packAlias("..", "");
+        System.arraycopy(dot, 0, first, 0, 11);
+        first[11] = 0x10;
+        put16(first, 26, cluster);
+        System.arraycopy(dotdot, 0, first, 32, 11);
+        first[32 + 11] = 0x10;
+        put16(first, 32 + 26, parentCluster);
+
+        long lba = clusterLba(cluster);
+        for (int s = 0; s < sectorsPerCluster; s++) {
+            writer.writeSector(lba + s, s == 0 ? first : new byte[512]);
+        }
+
+        boolean linked = false;
+        try {
+            writeFatValue(cluster, 0xffff);
+            linked = true;
+            List<byte[]> records = buildDirectoryRecords(preservedName, shortRaw, cluster, 0, 0x10);
+            for (int i = 0; i < records.size(); i++) writeSlot(targetSlots.get(i), records.get(i));
+            return cluster;
+        } catch (IOException e) {
+            if (linked) bestEffortFree(Collections.singletonList(cluster));
+            throw e;
+        }
+    }
+
     /**
      * Create or explicitly overwrite a file while preserving the selected filename through FAT long-name entries.
      * File data is written first, FAT copies second, directory metadata last.
@@ -232,7 +289,7 @@ public final class Fat16Volume {
             fatLinked = true;
 
             List<byte[]> records = buildDirectoryRecords(preservedName, shortRaw,
-                allocated.isEmpty() ? 0 : allocated.get(0), data.length);
+                allocated.isEmpty() ? 0 : allocated.get(0), data.length, 0x20);
             for (int i = 0; i < records.size(); i++) writeSlot(targetSlots.get(i), records.get(i));
 
             if (existing != null) {
@@ -412,7 +469,7 @@ public final class Fat16Volume {
         return raw;
     }
 
-    private static List<byte[]> buildDirectoryRecords(String longName, byte[] shortRaw, int cluster, long size) {
+    private static List<byte[]> buildDirectoryRecords(String longName, byte[] shortRaw, int cluster, long size, int attributes) {
         List<byte[]> result=new ArrayList<>();
         boolean needsLfn=!displayShortName(shortRaw).equals(longName);
         if(needsLfn) {
@@ -434,7 +491,7 @@ public final class Fat16Volume {
         }
         byte[] shortRec=new byte[32];
         System.arraycopy(shortRaw,0,shortRec,0,11);
-        shortRec[11]=0x20;
+        shortRec[11]=(byte)attributes;
         put16(shortRec,26,cluster); put32(shortRec,28,size);
         result.add(shortRec);
         return result;
