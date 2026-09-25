@@ -95,6 +95,38 @@ public class Fat16VolumeTest {
         v.writeFile(0,"Games",new byte[]{1},false);
         failIO(()->v.ensureDirectory(0,"Games"));
     }
+    @Test public void readsBackRenamesAndDeletesCalculatorFile() throws Exception {
+        Disk d=disk();Fat16Volume v=new Fat16Volume(d);
+        byte[] payload=new byte[900];for(int i=0;i<payload.length;i++)payload[i]=(byte)(i*7);
+        long before=v.freeBytes();
+        v.writeFile(0,"old file.bin",payload,false);
+        assertArrayEquals(payload,v.readFile(0,"old file.bin"));
+        assertEquals("new file.bin",v.renameEntry(0,"old file.bin","new file.bin"));
+        assertNull(v.findEntry(0,"old file.bin"));
+        assertNotNull(v.findEntry(0,"new file.bin"));
+        assertArrayEquals(payload,v.readFile(0,"new file.bin"));
+        v.deleteEntry(0,"new file.bin");
+        assertTrue(v.list(0).isEmpty());
+        assertEquals(before,v.freeBytes());
+    }
+    @Test public void deletesOnlyEmptyFolders() throws Exception {
+        Disk d=disk();Fat16Volume v=new Fat16Volume(d);
+        int folder=v.ensureDirectory(0,"Work Folder");
+        v.writeFile(folder,"note.txt",new byte[]{1},false);
+        failIO(()->v.deleteEntry(0,"Work Folder"));
+        v.deleteEntry(folder,"note.txt");
+        v.renameEntry(0,"Work Folder","Renamed Folder");
+        assertEquals("Renamed Folder",v.list(0).get(0).name);
+        v.deleteEntry(0,"Renamed Folder");
+        assertTrue(v.list(0).isEmpty());
+    }
+    @Test public void createsEmptyCalculatorFile() throws Exception {
+        Disk d=disk();Fat16Volume v=new Fat16Volume(d);
+        v.writeFile(0,"NEW.TXT",new byte[0],false);
+        Fat16Volume.Entry e=v.list(0).get(0);
+        assertEquals("NEW.TXT",e.name);assertEquals(0,e.size);
+        assertArrayEquals(new byte[0],v.readFile(0,"NEW.TXT"));
+    }
     @Test public void emptyRootAndLabel() throws Exception {
         Fat16Volume v=new Fat16Volume(disk());
         assertEquals("ENDRALINK",v.label);assertEquals(TOTAL*512L,v.capacityBytes);assertTrue(v.list(0).isEmpty());
