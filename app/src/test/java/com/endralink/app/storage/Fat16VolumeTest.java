@@ -48,7 +48,7 @@ public class Fat16VolumeTest {
     @Test public void createsFileWithoutOverwritingAndLinksBothFats() throws Exception {
         Disk d=disk();Fat16Volume v=new Fat16Volume(d);
         byte[] payload=new byte[700];for(int i=0;i<payload.length;i++)payload[i]=(byte)i;
-        v.writeFile(0,"HELLO.G3A",payload);
+        v.writeFile(0,"HELLO.G3A",payload,false);
         List<Fat16Volume.Entry> entries=v.list(0);
         assertEquals(1,entries.size());assertEquals("HELLO.G3A",entries.get(0).name);assertEquals(700,entries.get(0).size);
         int first=entries.get(0).cluster;assertTrue(first>=2);
@@ -56,18 +56,29 @@ public class Fat16VolumeTest {
         assertTrue(next>=2);
         assertEquals(0xffff,(d.at(1)[next*2]&255)|((d.at(1)[next*2+1]&255)<<8));
         assertEquals(d.at(1)[first*2],d.at(33)[first*2]);
-        failIO(()->v.writeFile(0,"hello.g3a",new byte[]{1}));
+        failIO(()->v.writeFile(0,"hello.g3a",new byte[]{1},false));
     }
-    @Test public void normalizesOrdinaryAndroidFileNames() throws Exception {
+    @Test public void preservesOrdinaryAndroidFileNamesWithLfn() throws Exception {
         Disk d=disk();Fat16Volume v=new Fat16Volume(d);
-        String stored=v.writeFile(0,"gba new.txt",new byte[]{1,2,3});
-        assertEquals("GBA_NEW.TXT",stored);
-        assertEquals("GBA_NEW.TXT",v.list(0).get(0).name);
+        String stored=v.writeFile(0,"gba new.txt",new byte[]{1,2,3},false);
+        assertEquals("gba new.txt",stored);
+        assertEquals("gba new.txt",v.list(0).get(0).name);
     }
-    @Test public void truncatesLongNamesSafely() throws Exception {
+    @Test public void preservesLongNamesAndOverwritesOnlyWhenAllowed() throws Exception {
         Disk d=disk();Fat16Volume v=new Fat16Volume(d);
-        String stored=v.writeFile(0,"this-name-is-too-long.g3a",new byte[]{1});
-        assertEquals("THIS-NAM.G3A",stored);
+        String name="this-name-is-too-long.g3a";
+        assertEquals(name,v.writeFile(0,name,new byte[]{1,2,3},false));
+        failIO(()->v.writeFile(0,name,new byte[]{9,8},false));
+        assertEquals(name,v.writeFile(0,name,new byte[]{9,8},true));
+        List<Fat16Volume.Entry> e=v.list(0);
+        assertEquals(1,e.size());assertEquals(name,e.get(0).name);assertEquals(2,e.get(0).size);
+    }
+    @Test public void reportsFreeSpaceAndConsumesItOnWrite() throws Exception {
+        Disk d=disk();Fat16Volume v=new Fat16Volume(d);
+        long before=v.freeBytes();
+        v.writeFile(0,"SPACE.TXT",new byte[700],false);
+        long after=v.freeBytes();
+        assertEquals(1024,before-after);
     }
     @Test public void emptyRootAndLabel() throws Exception {
         Fat16Volume v=new Fat16Volume(disk());
