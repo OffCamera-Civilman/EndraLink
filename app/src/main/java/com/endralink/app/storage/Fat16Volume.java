@@ -33,6 +33,15 @@ public final class Fat16Volume {
         final int offset;
         Slot(long lba, int offset) { this.lba = lba; this.offset = offset; }
     }
+    private static final class Existing {
+        final String name;
+        final boolean directory;
+        final int cluster;
+        final List<Slot> slots;
+        Existing(String name, boolean directory, int cluster, List<Slot> slots) {
+            this.name = name; this.directory = directory; this.cluster = cluster; this.slots = slots;
+        }
+    }
 
     private final SectorReader reader;
     private final SectorWriter writer;
@@ -152,35 +161,65 @@ public final class Fat16Volume {
         return entries;
     }
 
+    /** Return currently free data bytes by scanning the FAT. */
+    public long freeBytes() throws IOException {
+        long free = 0;
+        for (int cluster = 2; cluster <= clusters + 1; cluster++) {
+            if (fatValue(cluster) == 0) free++;
+        }
+        return free * sectorsPerCluster * 512L;
+    }
+
+    /** True when this directory already contains the exact displayed file name, case-insensitively. */
+    public boolean containsName(int directoryCluster, String fileName) throws IOException {
+        return findExisting(directoryCluster, fileName) != null;
+    }
+
     /**
-     * Create a new 8.3 file in the selected directory. Existing names are never overwritten.
-     * Data clusters are written first, FAT copies second, and the directory entry last.
+     * Create or explicitly overwrite a file while preserving the selected filename through FAT long-name entries.
+     * File data is written first, FAT copies second, directory metadata last.
      */
-    public synchronized String writeFile(int directoryCluster, String fileName, byte[] data) throws IOException {
+    public synchronized String writeFile(int directoryCluster, String fileName, byte[] data, boolean overwrite) throws IOException {
         if (writer == null) throw new IOException("This storage session does not permit writes.");
         if (data == null) throw new IOException("No file data supplied.");
         if (data.length > 64 * 1024 * 1024) throw new IOException("Selected file exceeds the 64 MiB transfer safety limit.");
-        byte[] shortRaw = encodeShortName(fileName);
-        String canonical = displayShortName(shortRaw);
-        for (Entry entry : list(directoryCluster)) {
-            if (entry.name.equalsIgnoreCase(canonical)) {
-                throw new IOException("A file or folder named " + canonical + " already exists. EndraLink will not overwrite it.");
-            }
+        String preservedName = validateLongName(fileName);
+
+        Existing existing = findExisting(directoryCluster, preservedName);
+        if (existing != null && existing.directory) throw new IOException("A folder with that name already exists.");
+        if (existing != null && !overwrite) throw new IOException("A file named " + preservedName + " already exists.");
+
+        Set<String> aliases = shortAliases(directoryCluster);
+        if (existing != null) {
+            // Its current short entry may be reused without counting as a collision.
+            byte[] oldShort = sector(existing.slots.get(existing.slots.size() - 1).lba);
+            aliases.remove(rawAliasKey(oldShort, existing.slots.get(existing.slots.size() - 1).offset));
         }
-        Slot slot = findFreeDirectorySlot(directoryCluster);
+        byte[] shortRaw = chooseShortAlias(preservedName, aliases);
+        boolean needsLfn = !displayShortName(shortRaw).equals(preservedName);
+        int lfnCount = needsLfn ? (preservedName.length() + 12) / 13 : 0;
+        int neededSlots = lfnCount + 1;
+
+        List<Slot> targetSlots;
+        if (existing != null && existing.slots.size() >= neededSlots) {
+            targetSlots = new ArrayList<>(existing.slots.subList(existing.slots.size() - neededSlots, existing.slots.size()));
+        } else {
+            targetSlots = findContiguousFreeSlots(directoryCluster, neededSlots);
+        }
+
         int clusterBytes = sectorsPerCluster * 512;
-        int needed = data.length == 0 ? 0 : (data.length + clusterBytes - 1) / clusterBytes;
-        List<Integer> allocated = findFreeClusters(needed);
+        int neededClusters = data.length == 0 ? 0 : (data.length + clusterBytes - 1) / clusterBytes;
+        List<Integer> allocated = findFreeClusters(neededClusters);
 
         int position = 0;
         for (int cluster : allocated) {
             long lba = clusterLba(cluster);
             for (int s = 0; s < sectorsPerCluster; s++) {
                 byte[] block = new byte[512];
-                int count = Math.min(512, data.length - position);
+                int count = Math.min(512, Math.max(0, data.length - position));
                 if (count > 0) System.arraycopy(data, position, block, 0, count);
                 writer.writeSector(lba + s, block);
-                position += Math.max(count, 0);
+                position += count;
             }
         }
 
@@ -192,25 +231,19 @@ public final class Fat16Volume {
             }
             fatLinked = true;
 
-            byte[] directorySector = sector(slot.lba);
-            boolean wasEnd = u8(directorySector, slot.offset) == 0;
-            Arrays.fill(directorySector, slot.offset, slot.offset + 32, (byte)0);
-            System.arraycopy(shortRaw, 0, directorySector, slot.offset, 11);
-            directorySector[slot.offset + 11] = 0x20;
-            int firstCluster = allocated.isEmpty() ? 0 : allocated.get(0);
-            put16(directorySector, slot.offset + 26, firstCluster);
-            put32(directorySector, slot.offset + 28, data.length);
-            writer.writeSector(slot.lba, directorySector);
+            List<byte[]> records = buildDirectoryRecords(preservedName, shortRaw,
+                allocated.isEmpty() ? 0 : allocated.get(0), data.length);
+            for (int i = 0; i < records.size(); i++) writeSlot(targetSlots.get(i), records.get(i));
 
-            if (wasEnd && slot.offset + 32 < 512) {
-                // Keep an explicit end marker after the new entry when possible.
-                byte[] verify = sector(slot.lba);
-                if (u8(verify, slot.offset + 32) != 0) {
-                    verify[slot.offset + 32] = 0;
-                    writer.writeSector(slot.lba, verify);
+            if (existing != null) {
+                Set<String> reused = new HashSet<>();
+                for (Slot s : targetSlots) reused.add(s.lba + ":" + s.offset);
+                for (Slot s : existing.slots) {
+                    if (!reused.contains(s.lba + ":" + s.offset)) markDeleted(s);
                 }
+                if (existing.cluster >= 2) freeClusterChain(existing.cluster);
             }
-            return canonical;
+            return preservedName;
         } catch (IOException e) {
             if (fatLinked) bestEffortFree(allocated);
             throw e;
@@ -227,31 +260,209 @@ public final class Fat16Volume {
         return result;
     }
 
-    private Slot findFreeDirectorySlot(int firstCluster) throws IOException {
+    private List<Slot> directorySlots(int firstCluster) throws IOException {
+        List<Slot> result = new ArrayList<>();
         if (firstCluster == 0) {
             int remaining = rootEntries;
-            for (int s = 0; s < rootSectors; s++) {
-                byte[] block = sector(rootStart + s);
+            for (int s = 0; s < rootSectors && remaining > 0; s++) {
                 int slots = Math.min(16, remaining);
-                for (int i = 0; i < slots; i++) {
-                    int first = u8(block, i * 32);
-                    if (first == 0 || first == 0xe5) return new Slot(rootStart + s, i * 32);
-                }
+                for (int i = 0; i < slots; i++) result.add(new Slot(rootStart + s, i * 32));
                 remaining -= slots;
             }
         } else {
             for (int cluster : directoryChain(firstCluster)) {
                 long lba = clusterLba(cluster);
-                for (int s = 0; s < sectorsPerCluster; s++) {
-                    byte[] block = sector(lba + s);
-                    for (int i = 0; i < 16; i++) {
-                        int first = u8(block, i * 32);
-                        if (first == 0 || first == 0xe5) return new Slot(lba + s, i * 32);
-                    }
-                }
+                for (int s = 0; s < sectorsPerCluster; s++)
+                    for (int i = 0; i < 16; i++) result.add(new Slot(lba + s, i * 32));
             }
         }
-        throw new IOException("This calculator folder has no free directory entry. Choose another folder.");
+        return result;
+    }
+
+    private List<Slot> findContiguousFreeSlots(int firstCluster, int count) throws IOException {
+        List<Slot> slots = directorySlots(firstCluster);
+        List<Slot> run = new ArrayList<>();
+        for (Slot slot : slots) {
+            byte[] block = sector(slot.lba);
+            int first = u8(block, slot.offset);
+            if (first == 0 || first == 0xe5) {
+                run.add(slot);
+                if (run.size() == count) return new ArrayList<>(run);
+            } else run.clear();
+        }
+        throw new IOException("This calculator folder does not have enough contiguous directory space for that filename.");
+    }
+
+    private Existing findExisting(int firstCluster, String target) throws IOException {
+        List<Slot> slots = directorySlots(firstCluster);
+        List<Slot> pending = new ArrayList<>();
+        String[] longParts = null;
+        int nextOrdinal = 0, longChecksum = -1;
+
+        for (Slot slot : slots) {
+            byte[] block = sector(slot.lba);
+            int o = slot.offset, first = u8(block,o), attr = u8(block,o+11);
+            if (first == 0) break;
+            if (first == 0xe5) { pending.clear(); longParts=null; continue; }
+            if (attr == 0x0f) {
+                pending.add(slot);
+                int ordinal = first & 0x1f;
+                if ((first & 0x40) != 0) {
+                    longParts = ordinal >= 1 && ordinal <= 20 ? new String[ordinal] : null;
+                    nextOrdinal = ordinal;
+                    longChecksum = u8(block,o+13);
+                }
+                if (longParts == null || ordinal != nextOrdinal || ordinal < 1 ||
+                    u8(block,o+12) != 0 || u16(block,o+26) != 0 || u8(block,o+13) != longChecksum) {
+                    longParts = null;
+                } else {
+                    StringBuilder part = new StringBuilder();
+                    int[] positions = {1,3,5,7,9,14,16,18,20,22,24,28,30};
+                    for (int p : positions) {
+                        int ch=u16(block,o+p);
+                        if(ch==0||ch==0xffff) break;
+                        part.append((char)ch);
+                    }
+                    longParts[ordinal-1]=part.toString();
+                    nextOrdinal--;
+                }
+                continue;
+            }
+
+            String name=shortName(block,o);
+            if(longParts!=null && nextOrdinal==0 && checksum(block,o)==longChecksum) {
+                String candidate=String.join("",longParts);
+                if(!candidate.isEmpty()) name=candidate;
+            }
+            boolean directory=(attr&16)!=0;
+            int cluster=u16(block,o+26);
+            List<Slot> group=new ArrayList<>(pending); group.add(slot);
+            pending.clear(); longParts=null;
+            if((attr&8)==0 && !name.equals(".") && !name.equals("..") && name.equalsIgnoreCase(target))
+                return new Existing(name,directory,cluster,group);
+        }
+        return null;
+    }
+
+    private Set<String> shortAliases(int firstCluster) throws IOException {
+        Set<String> result=new HashSet<>();
+        for(Slot slot:directorySlots(firstCluster)) {
+            byte[] block=sector(slot.lba); int o=slot.offset, first=u8(block,o), attr=u8(block,o+11);
+            if(first==0) break;
+            if(first!=0xe5 && attr!=0x0f) result.add(rawAliasKey(block,o));
+        }
+        return result;
+    }
+
+    private static String rawAliasKey(byte[] block,int offset) {
+        return new String(block,offset,11,Charset.forName("ISO-8859-1"));
+    }
+
+    private static String validateLongName(String name) throws IOException {
+        if(name==null) throw new IOException("Selected file has no name.");
+        String n=name.trim();
+        if(n.isEmpty()||n.equals(".")||n.equals("..")||n.length()>255) throw new IOException("Invalid file name.");
+        for(int i=0;i<n.length();i++) {
+            char ch=n.charAt(i);
+            if(ch<32 || "\\/:*?\"<>|".indexOf(ch)>=0) throw new IOException("File name contains a character FAT cannot store.");
+        }
+        if(n.endsWith(".")||n.endsWith(" ")) throw new IOException("File name cannot end with a dot or space.");
+        return n;
+    }
+
+    private static byte[] chooseShortAlias(String name, Set<String> used) throws IOException {
+        int dot=name.lastIndexOf('.');
+        String base=dot>0?name.substring(0,dot):name;
+        String ext=dot>0&&dot<name.length()-1?name.substring(dot+1):"";
+        String cleanBase=sanitizeShortPart(base,8);
+        String cleanExt=sanitizeShortPart(ext,3);
+        if(cleanBase.isEmpty()) cleanBase="FILE";
+
+        byte[] direct=packAlias(cleanBase,cleanExt);
+        if(isStrict83(name) && !used.contains(new String(direct,Charset.forName("ISO-8859-1")))) return direct;
+
+        String stem=sanitizeShortPart(base,6);
+        if(stem.isEmpty()) stem="FILE";
+        for(int n=1;n<=999999;n++) {
+            String suffix="~"+n;
+            int keep=Math.max(1,8-suffix.length());
+            String candidate=sanitizeShortPart(base,keep);
+            if(candidate.isEmpty()) candidate="FILE".substring(0,Math.min(keep,4));
+            byte[] raw=packAlias(candidate+suffix,cleanExt);
+            if(!used.contains(new String(raw,Charset.forName("ISO-8859-1")))) return raw;
+        }
+        throw new IOException("Could not create a unique FAT short-name alias.");
+    }
+
+    private static boolean isStrict83(String name) {
+        int dot=name.lastIndexOf('.');
+        String base=dot>0?name.substring(0,dot):name;
+        String ext=dot>0&&dot<name.length()-1?name.substring(dot+1):"";
+        if(base.length()<1||base.length()>8||ext.length()>3) return false;
+        return name.equals(name.toUpperCase(Locale.ROOT)) &&
+            sanitizeShortPart(base,8).equals(base) && sanitizeShortPart(ext,3).equals(ext);
+    }
+
+    private static byte[] packAlias(String base,String ext) {
+        byte[] raw=new byte[11]; Arrays.fill(raw,(byte)' ');
+        byte[] b=base.getBytes(Charset.forName("US-ASCII"));
+        byte[] e=ext.getBytes(Charset.forName("US-ASCII"));
+        System.arraycopy(b,0,raw,0,Math.min(8,b.length));
+        System.arraycopy(e,0,raw,8,Math.min(3,e.length));
+        return raw;
+    }
+
+    private static List<byte[]> buildDirectoryRecords(String longName, byte[] shortRaw, int cluster, long size) {
+        List<byte[]> result=new ArrayList<>();
+        boolean needsLfn=!displayShortName(shortRaw).equals(longName);
+        if(needsLfn) {
+            int count=(longName.length()+12)/13;
+            int sum=shortChecksum(shortRaw);
+            for(int ordinal=count;ordinal>=1;ordinal--) {
+                byte[] rec=new byte[32]; Arrays.fill(rec,(byte)0xff);
+                rec[0]=(byte)(ordinal | (ordinal==count?0x40:0));
+                rec[11]=0x0f; rec[12]=0; rec[13]=(byte)sum; rec[26]=0; rec[27]=0;
+                int[] positions={1,3,5,7,9,14,16,18,20,22,24,28,30};
+                int start=(ordinal-1)*13;
+                for(int i=0;i<13;i++) {
+                    int idx=start+i;
+                    int value=idx<longName.length()?longName.charAt(idx):(idx==longName.length()?0:0xffff);
+                    put16(rec,positions[i],value);
+                }
+                result.add(rec);
+            }
+        }
+        byte[] shortRec=new byte[32];
+        System.arraycopy(shortRaw,0,shortRec,0,11);
+        shortRec[11]=0x20;
+        put16(shortRec,26,cluster); put32(shortRec,28,size);
+        result.add(shortRec);
+        return result;
+    }
+
+    private void writeSlot(Slot slot, byte[] record) throws IOException {
+        byte[] block=sector(slot.lba);
+        System.arraycopy(record,0,block,slot.offset,32);
+        writer.writeSector(slot.lba,block);
+    }
+
+    private void markDeleted(Slot slot) throws IOException {
+        byte[] block=sector(slot.lba);
+        block[slot.offset]=(byte)0xe5;
+        writer.writeSector(slot.lba,block);
+    }
+
+    private void freeClusterChain(int firstCluster) throws IOException {
+        Set<Integer> seen=new HashSet<>();
+        int cluster=firstCluster;
+        while(cluster>=2 && cluster<0xfff8) {
+            validCluster(cluster);
+            if(!seen.add(cluster)) throw new IOException("Existing file cluster loop detected.");
+            int next=fatValue(cluster);
+            writeFatValue(cluster,0);
+            if(next>=0xfff8) break;
+            cluster=next;
+        }
     }
 
     private List<Integer> directoryChain(int firstCluster) throws IOException {
@@ -319,29 +530,6 @@ public final class Fat16Volume {
         return Arrays.copyOf(data, data.length);
     }
 
-    private static byte[] encodeShortName(String name) throws IOException {
-        if (name == null) throw new IOException("Selected file has no name.");
-        String trimmed = name.trim();
-        if (trimmed.isEmpty() || trimmed.equals(".") || trimmed.equals("..")) throw new IOException("Invalid file name.");
-
-        int dot = trimmed.lastIndexOf('.');
-        String base = dot > 0 ? trimmed.substring(0, dot) : trimmed;
-        String ext = dot > 0 && dot < trimmed.length() - 1 ? trimmed.substring(dot + 1) : "";
-
-        String safeBase = sanitizeShortPart(base, 8);
-        String safeExt = sanitizeShortPart(ext, 3);
-        if (safeBase.isEmpty()) safeBase = "FILE";
-
-        byte[] raw = new byte[11];
-        Arrays.fill(raw, (byte)' ');
-        byte[] baseBytes = safeBase.getBytes(Charset.forName("US-ASCII"));
-        byte[] extBytes = safeExt.getBytes(Charset.forName("US-ASCII"));
-        System.arraycopy(baseBytes, 0, raw, 0, baseBytes.length);
-        System.arraycopy(extBytes, 0, raw, 8, extBytes.length);
-        return raw;
-    }
-
-    /** Convert ordinary Android names into a conservative FAT 8.3 calculator name. */
     private static String sanitizeShortPart(String input, int limit) {
         if (input == null || input.isEmpty()) return "";
         String allowed = "$%'-_@~\u0060!(){}^#&";
@@ -391,6 +579,11 @@ public final class Fat16Volume {
     private static int checksum(byte[] data, int offset) {
         int sum = 0;
         for (int i = 0; i < 11; i++) sum = (((sum & 1) << 7) + (sum >> 1) + u8(data, offset + i)) & 255;
+        return sum;
+    }
+    private static int shortChecksum(byte[] raw) {
+        int sum=0;
+        for(int i=0;i<11;i++) sum=(((sum&1)<<7)+(sum>>1)+(raw[i]&255))&255;
         return sum;
     }
 
