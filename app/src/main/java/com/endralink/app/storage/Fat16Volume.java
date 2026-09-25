@@ -37,9 +37,12 @@ public final class Fat16Volume {
         final String name;
         final boolean directory;
         final int cluster;
+        final long size;
+        final int attributes;
         final List<Slot> slots;
-        Existing(String name, boolean directory, int cluster, List<Slot> slots) {
-            this.name = name; this.directory = directory; this.cluster = cluster; this.slots = slots;
+        Existing(String name, boolean directory, int cluster, long size, int attributes, List<Slot> slots) {
+            this.name = name; this.directory = directory; this.cluster = cluster;
+            this.size = size; this.attributes = attributes; this.slots = slots;
         }
     }
 
@@ -232,6 +235,75 @@ public final class Fat16Volume {
         }
     }
 
+    /** Read a calculator file into memory, bounded by the same 64 MiB transfer safety limit. */
+    public synchronized byte[] readFile(int directoryCluster, String fileName) throws IOException {
+        Existing existing = findExisting(directoryCluster, fileName);
+        if (existing == null) throw new IOException("File not found: " + fileName);
+        if (existing.directory) throw new IOException(fileName + " is a folder.");
+        if (existing.size > 64L * 1024L * 1024L) throw new IOException("File exceeds the 64 MiB transfer safety limit.");
+        if (existing.size == 0) return new byte[0];
+        if (existing.cluster < 2) throw new IOException("File has invalid cluster metadata.");
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream((int)existing.size);
+        long remaining = existing.size;
+        for (int cluster : directoryChain(existing.cluster)) {
+            long lba = clusterLba(cluster);
+            for (int s = 0; s < sectorsPerCluster && remaining > 0; s++) {
+                byte[] block = sector(lba + s);
+                int count = (int)Math.min(512L, remaining);
+                out.write(block, 0, count);
+                remaining -= count;
+            }
+            if (remaining == 0) break;
+        }
+        if (remaining != 0) throw new IOException("File cluster chain ended before the declared size.");
+        return out.toByteArray();
+    }
+
+    /** Rename a file or folder in-place without changing its data cluster chain. */
+    public synchronized String renameEntry(int directoryCluster, String oldName, String newName) throws IOException {
+        if (writer == null) throw new IOException("This storage session does not permit writes.");
+        String preservedName = validateLongName(newName);
+        Existing existing = findExisting(directoryCluster, oldName);
+        if (existing == null) throw new IOException("Entry not found: " + oldName);
+        Existing collision = findExisting(directoryCluster, preservedName);
+        if (collision != null && !collision.name.equalsIgnoreCase(existing.name))
+            throw new IOException("An item named " + preservedName + " already exists.");
+
+        Set<String> aliases = shortAliases(directoryCluster);
+        byte[] oldShortSector = sector(existing.slots.get(existing.slots.size()-1).lba);
+        aliases.remove(rawAliasKey(oldShortSector, existing.slots.get(existing.slots.size()-1).offset));
+        byte[] shortRaw = chooseShortAlias(preservedName, aliases);
+        boolean needsLfn = !displayShortName(shortRaw).equals(preservedName);
+        int neededSlots = (needsLfn ? (preservedName.length()+12)/13 : 0) + 1;
+
+        List<Slot> targetSlots;
+        if (existing.slots.size() >= neededSlots)
+            targetSlots = new ArrayList<>(existing.slots.subList(existing.slots.size()-neededSlots, existing.slots.size()));
+        else
+            targetSlots = findContiguousFreeSlots(directoryCluster, neededSlots);
+
+        List<byte[]> records = buildDirectoryRecords(preservedName, shortRaw, existing.cluster,
+            existing.size, existing.directory ? 0x10 : (existing.attributes & 0x3f));
+        for (int i=0;i<records.size();i++) writeSlot(targetSlots.get(i), records.get(i));
+
+        Set<String> reused = new HashSet<>();
+        for (Slot s: targetSlots) reused.add(s.lba+":"+s.offset);
+        for (Slot s: existing.slots) if (!reused.contains(s.lba+":"+s.offset)) markDeleted(s);
+        return preservedName;
+    }
+
+    /** Delete a file, or an empty folder. Non-empty folders are intentionally refused. */
+    public synchronized void deleteEntry(int directoryCluster, String name) throws IOException {
+        if (writer == null) throw new IOException("This storage session does not permit writes.");
+        Existing existing = findExisting(directoryCluster, name);
+        if (existing == null) throw new IOException("Entry not found: " + name);
+        if (existing.directory && !list(existing.cluster).isEmpty())
+            throw new IOException("Folder is not empty. Empty it before deleting.");
+        for (Slot s : existing.slots) markDeleted(s);
+        if (existing.cluster >= 2) freeClusterChain(existing.cluster);
+    }
+
     /**
      * Create or explicitly overwrite a file while preserving the selected filename through FAT long-name entries.
      * File data is written first, FAT copies second, directory metadata last.
@@ -393,10 +465,11 @@ public final class Fat16Volume {
             }
             boolean directory=(attr&16)!=0;
             int cluster=u16(block,o+26);
+            long size=u32(block,o+28);
             List<Slot> group=new ArrayList<>(pending); group.add(slot);
             pending.clear(); longParts=null;
             if((attr&8)==0 && !name.equals(".") && !name.equals("..") && name.equalsIgnoreCase(target))
-                return new Existing(name,directory,cluster,group);
+                return new Existing(name,directory,cluster,size,attr,group);
         }
         return null;
     }
