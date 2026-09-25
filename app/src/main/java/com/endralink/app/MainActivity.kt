@@ -41,6 +41,7 @@ class MainActivity : AppCompatActivity() {
     @Volatile private var destroyed = false
     private var busy = false
     private var ejecting = false
+    private var transferring = false
     private var storage: UsbStorageSession? = null
     private var selectedUri: Uri? = null
     private var selectedName: String? = null
@@ -137,15 +138,15 @@ class MainActivity : AppCompatActivity() {
             if (folderStack.isNotEmpty()) folderStack.removeAt(folderStack.lastIndex)
             browseDirectory(folderStack.lastOrNull()?.second ?: 0)
         }
+        findViewById<Button>(R.id.collapseBrowser).setOnClickListener {
+            val body = findViewById<View>(R.id.browserBody)
+            val collapsed = body.visibility == View.VISIBLE
+            body.visibility = if (collapsed) View.GONE else View.VISIBLE
+            findViewById<Button>(R.id.collapseBrowser).text = if (collapsed) "Expand" else "Collapse"
+            DebugLog.event("BROWSER_COLLAPSE", "collapsed=" + collapsed)
+        }
         findViewById<Button>(R.id.copy).setOnClickListener {
-            val name = selectedName ?: return@setOnClickListener
-            val destination = "/" + folderStack.joinToString("/") { it.first }
-            AlertDialog.Builder(this)
-                .setTitle("Transfer to calculator?")
-                .setMessage(name + "\n\nDestination: " + destination + "\n\nExisting files are never overwritten.")
-                .setPositiveButton("Transfer") { _, _ -> transferSelectedFile() }
-                .setNegativeButton("Cancel", null)
-                .show()
+            confirmTransfer()
         }
         disconnect.setOnClickListener {
             DebugLog.event("TAP", "eject")
@@ -290,15 +291,36 @@ class MainActivity : AppCompatActivity() {
     } == true
 
     private fun setBusy(busy: Boolean) {
-        DebugLog.event("BUSY_STATE", "busy=" + busy + " handleOpen=" + (connection != null))
+        DebugLog.event("BUSY_STATE", "busy=" + busy + " transferring=" + transferring + " handleOpen=" + (connection != null))
         this.busy = busy
         progress.isIndeterminate = true
-        progress.visibility = if (busy) View.VISIBLE else View.GONE
+        progress.visibility = if (busy && !transferring) View.VISIBLE else View.GONE
         connect.isEnabled = !busy && connection == null
-        disconnect.isEnabled = !ejecting && (busy || connection != null)
+        disconnect.isEnabled = !busy && !ejecting && connection != null
         findViewById<Button>(R.id.browse).isEnabled = !busy && connection != null
         findViewById<Button>(R.id.upFolder).isEnabled = !busy && folderStack.isNotEmpty()
+        findViewById<Button>(R.id.collapseBrowser).isEnabled = !busy
+        findViewById<Button>(R.id.openPhone).isEnabled = !busy
+        findViewById<Button>(R.id.exportLog).isEnabled = !busy
+        findViewById<Button>(R.id.homeBack).isEnabled = !busy
         findViewById<Button>(R.id.copy).isEnabled = !busy && storage != null && selectedUri != null
+        findViewById<ProgressBar>(R.id.transferProgress).visibility = if (transferring) View.VISIBLE else View.GONE
+    }
+
+    private fun setTransferMode(active: Boolean) {
+        transferring = active
+        findViewById<View>(R.id.browserPanel).visibility = if (active) View.GONE else
+            if (storage != null) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.browse).visibility = if (active) View.GONE else View.VISIBLE
+        findViewById<View>(R.id.connect).visibility = if (active) View.GONE else View.VISIBLE
+        findViewById<View>(R.id.eject).visibility = if (active) View.GONE else View.VISIBLE
+        findViewById<View>(R.id.exportLog).visibility = if (active) View.GONE else View.VISIBLE
+        findViewById<View>(R.id.homeBack).visibility = if (active) View.GONE else View.VISIBLE
+        findViewById<View>(R.id.workspaceHeader).visibility = if (active) View.GONE else View.VISIBLE
+        findViewById<View>(R.id.workspaceFooter).visibility = if (active) View.GONE else View.VISIBLE
+        findViewById<Button>(R.id.openPhone).visibility = if (active) View.GONE else View.VISIBLE
+        findViewById<Button>(R.id.copy).visibility = if (active) View.GONE else View.VISIBLE
+        findViewById<ProgressBar>(R.id.transferProgress).visibility = if (active) View.VISIBLE else View.GONE
     }
 
     /** Send a real eject request before releasing ownership; report only confirmed outcomes. */
@@ -453,8 +475,10 @@ class MainActivity : AppCompatActivity() {
         status.text = "FAT16 storage ready"
         details.text = "FAT16 access • " + entries.size + " items in this folder"
         findViewById<View>(R.id.browserPanel).visibility = View.VISIBLE
+        val freeBytes = runCatching { volume.freeBytes() }.getOrDefault(-1L)
         findViewById<TextView>(R.id.storageInfo).text =
-            "FAT16 • " + String.format(Locale.ROOT, "%.1f MiB", volume.capacityBytes / 1048576.0) +
+            "FAT16 • " + (if (freeBytes >= 0) formatMiB(freeBytes) + " free / " else "") +
+                formatMiB(volume.capacityBytes) +
                 if (volume.label.isNotBlank()) " • " + volume.label else ""
         findViewById<TextView>(R.id.folderPath).text = "/" + folderStack.joinToString("/") { it.first }
         val list = findViewById<LinearLayout>(R.id.fileList)
@@ -507,6 +531,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+    private fun formatMiB(bytes: Long): String = String.format(Locale.ROOT, "%.1f MiB", bytes / 1048576.0)
 
     override fun onResume() {
         super.onResume()
@@ -549,19 +574,68 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.copy).isEnabled = !busy && storage != null
     }
 
-    private fun transferSelectedFile() {
+    private fun confirmTransfer() {
         if (busy) return
         val session = storage ?: run {
             status.text = "Browse calculator storage before transferring a file."
             return
         }
+        val name = selectedName ?: return
+        val directoryCluster = folderStack.lastOrNull()?.second ?: 0
+        val request = generation
+        setBusy(true)
+        status.text = "Checking destination…"
+        worker.execute {
+            try {
+                val exists = session.volume.containsName(directoryCluster, name)
+                main.post {
+                    if (!destroyed && generation == request) {
+                        setBusy(false)
+                        val destination = "/" + folderStack.joinToString("/") { it.first }
+                        if (exists) {
+                            AlertDialog.Builder(this)
+                                .setTitle("Overwrite existing file?")
+                                .setMessage(name + "\n\nDestination: " + destination +
+                                    "\n\nA file with this name already exists. Replace it?")
+                                .setPositiveButton("Overwrite") { _, _ -> transferSelectedFile(true) }
+                                .setNegativeButton("Cancel", null)
+                                .show()
+                        } else {
+                            AlertDialog.Builder(this)
+                                .setTitle("Transfer to calculator?")
+                                .setMessage(name + "\n\nDestination: " + destination)
+                                .setPositiveButton("Transfer") { _, _ -> transferSelectedFile(false) }
+                                .setNegativeButton("Cancel", null)
+                                .show()
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                DebugLog.event("TRANSFER_PREFLIGHT_ERROR", error = e)
+                main.post {
+                    if (!destroyed && generation == request) {
+                        setBusy(false)
+                        status.text = "Could not check destination"
+                        details.text = e.message ?: e.javaClass.simpleName
+                    }
+                }
+            }
+        }
+    }
+
+    private fun transferSelectedFile(overwrite: Boolean) {
+        if (busy) return
+        val session = storage ?: return
         val uri = selectedUri ?: return
         val name = selectedName ?: "FILE.BIN"
         val directoryCluster = folderStack.lastOrNull()?.second ?: 0
         val request = generation
+        transferring = true
+        setTransferMode(true)
         setBusy(true)
         status.text = "Transferring " + name + "…"
-        details.text = "Do not disconnect the calculator during the transfer."
+        details.text = "Do not disconnect the calculator."
+        findViewById<TextView>(R.id.progressText).text = "Transferring: " + name
         worker.execute {
             try {
                 val bytes = contentResolver.openInputStream(uri)?.use { input ->
@@ -577,23 +651,35 @@ class MainActivity : AppCompatActivity() {
                     }
                     buffer.toByteArray()
                 } ?: throw java.io.IOException("Could not open the selected Android file.")
-                val storedName = session.volume.writeFile(directoryCluster, name, bytes)
-                DebugLog.event("TRANSFER_SUCCESS", "bytes=" + bytes.size + " directoryCluster=" + directoryCluster + " storedName=" + storedName)
+
+                val storedName = session.volume.writeFile(directoryCluster, name, bytes, overwrite)
+                val free = session.volume.freeBytes()
+                DebugLog.event("TRANSFER_SUCCESS", "bytes=" + bytes.size + " directoryCluster=" +
+                    directoryCluster + " storedName=" + storedName + " overwrite=" + overwrite)
                 main.post {
                     if (!destroyed && generation == request) {
+                        transferring = false
+                        setTransferMode(false)
                         setBusy(false)
-                        status.text = "Transfer complete: " + storedName
-                        details.text = bytes.size.toString() + " bytes written as " + storedName + ". Browse the folder to verify the file."
-                        browseDirectory(directoryCluster)
+                        status.text = "Transfer complete"
+                        details.text = storedName + " • " + bytes.size + " bytes transferred successfully."
+                        findViewById<TextView>(R.id.progressText).text = "✓ Transfer complete: " + storedName
+                        findViewById<TextView>(R.id.storageInfo).text =
+                            "FAT16 • " + formatMiB(free) + " free / " + formatMiB(session.volume.capacityBytes) +
+                                if (session.volume.label.isNotBlank()) " • " + session.volume.label else ""
+                        Toast.makeText(this, "Transfer complete: " + storedName, Toast.LENGTH_LONG).show()
                     }
                 }
             } catch (e: Exception) {
                 DebugLog.event("TRANSFER_ERROR", error = e)
                 main.post {
                     if (!destroyed && generation == request) {
+                        transferring = false
+                        setTransferMode(false)
                         setBusy(false)
                         status.text = "Transfer failed"
                         details.text = e.message ?: e.javaClass.simpleName
+                        findViewById<TextView>(R.id.progressText).text = "Transfer failed: " + (e.message ?: "Unknown error")
                     }
                 }
             }
