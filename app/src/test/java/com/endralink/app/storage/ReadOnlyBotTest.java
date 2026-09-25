@@ -10,17 +10,24 @@ import static org.junit.Assert.*;
 public class ReadOnlyBotTest {
     private static class Pipe implements ReadOnlyBot.BulkPipe {
         byte[] cbw;
+        byte[] written;
+        int currentOp;
         Queue<byte[]> incoming = new ArrayDeque<>();
         boolean badTag, badSignature, phaseError, shortData, badResidue, shortCommand, failReady;
         List<Integer> commands=new ArrayList<>();
         public int send(byte[] data,int offset,int length) {
+            if(length==512 && currentOp==0x2a) {
+                written=Arrays.copyOfRange(data,offset,offset+length);
+                return length;
+            }
             cbw=Arrays.copyOfRange(data,offset,offset+length);
             ByteBuffer b=ByteBuffer.wrap(cbw).order(ByteOrder.LITTLE_ENDIAN);
             assertEquals(31,length);assertEquals(0x43425355,b.getInt());
             int tag=b.getInt(), size=b.getInt(), op=cbw[15]&255;
-            assertEquals(0x80,cbw[12]&255);commands.add(op);
+            currentOp=op;
+            assertEquals(op==0x2a?0x00:0x80,cbw[12]&255);commands.add(op);
             boolean failed=failReady&&op==0; if(failed)failReady=false;
-            if(size>0) {
+            if(size>0 && op!=0x2a) {
                 byte[] payload=new byte[shortData?size-1:size];
                 if(op==0x25)ByteBuffer.wrap(payload).putInt(8191).putInt(512);
                 if(op==3)payload[2]=6;
@@ -46,6 +53,15 @@ public class ReadOnlyBotTest {
         assertEquals(8192,b.sectorCount());assertEquals(512,b.readSector(77).length);
         assertEquals(Arrays.asList(0,0x25,0x28),p.commands);
         assertEquals(77,ByteBuffer.wrap(p.cbw).getInt(17));assertEquals(1,p.cbw[23]);
+    }
+    @Test public void writesExactlyOneSectorWithWrite10() throws Exception {
+        Pipe p=new Pipe();ReadOnlyBot b=new ReadOnlyBot(p);b.initialize();
+        byte[] data=new byte[512];data[0]=42;data[511]=7;
+        b.writeSector(123,data);
+        assertEquals(Arrays.asList(0,0x25,0x2a),p.commands);
+        assertArrayEquals(data,p.written);
+        assertEquals(123,ByteBuffer.wrap(p.cbw).getInt(17));
+        assertEquals(1,p.cbw[23]);
     }
     @Test public void consumesUnitAttention() throws Exception {
         Pipe p=new Pipe();p.failReady=true;ReadOnlyBot b=new ReadOnlyBot(p);b.initialize();
