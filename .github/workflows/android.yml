@@ -75,9 +75,9 @@ jobs:
             exit 1
           fi
           cat > release-notes.md <<'NOTES'
-          Android testing build — read-only calculator browsing. File transfers are not enabled.
+          Android testing build with EndraLink phone file manager, multi-select file and recursive folder transfer to fx-CG50, preserved long filenames, overwrite confirmation, storage free-space display, and transfer progress notifications.
 
-          Download **EndraLink.apk** below (Android 8.0 or newer). This is a debug APK, not a production release.
+          Download **EndraLink.apk** below (Android 8.0 or newer). This is a debug APK, not a production release. The first phone-folder setup uses Android's folder permission screen; normal browsing then happens inside EndraLink.
 
           To report a problem: reproduce it, tap **Export debug log**, save the text file, and attach it to your report. Logs include app actions, Android/device details, USB permission and storage errors; no calculator file contents are collected.
 
