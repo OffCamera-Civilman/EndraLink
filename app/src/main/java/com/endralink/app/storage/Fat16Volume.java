@@ -5,11 +5,14 @@ import java.io.IOException;
 import java.nio.charset.Charset;
 import java.util.*;
 
-/** Bounded, read-only FAT16 directory reader. No sector-write API exists. */
+/** Bounded FAT16 reader with conservative create-only file writes. */
 public final class Fat16Volume {
     public interface SectorReader {
         long sectorCount();
         byte[] readSector(long lba) throws IOException;
+    }
+    public interface SectorWriter {
+        void writeSector(long lba, byte[] data) throws IOException;
     }
 
     public static final class Entry {
@@ -25,9 +28,16 @@ public final class Fat16Volume {
         }
     }
 
+    private static final class Slot {
+        final long lba;
+        final int offset;
+        Slot(long lba, int offset) { this.lba = lba; this.offset = offset; }
+    }
+
     private final SectorReader reader;
+    private final SectorWriter writer;
     private final long start, total, fatStart, rootStart, dataStart;
-    private final int sectorsPerCluster, rootEntries, rootSectors, clusters;
+    private final int sectorsPerCluster, rootEntries, rootSectors, clusters, fats, fatSectors;
     private long cachedFatSector = -1;
     private byte[] cachedFat;
     public final String label;
@@ -36,6 +46,7 @@ public final class Fat16Volume {
     /** Accept an unpartitioned volume or exactly one primary FAT16 MBR partition. */
     public Fat16Volume(SectorReader reader) throws IOException {
         this.reader = reader;
+        this.writer = reader instanceof SectorWriter ? (SectorWriter) reader : null;
         byte[] first = sector(0);
         long base = 0, limit = reader.sectorCount();
         byte[] boot = first;
@@ -58,7 +69,9 @@ public final class Fat16Volume {
         if (!looksLikeBoot(boot)) throw new IOException("Unsupported or invalid FAT boot sector (512-byte FAT16 required).");
         start = base;
         sectorsPerCluster = u8(boot, 13);
-        int reserved = u16(boot, 14), fats = u8(boot, 16), fatSectors = u16(boot, 22);
+        int reserved = u16(boot, 14);
+        fats = u8(boot, 16);
+        fatSectors = u16(boot, 22);
         rootEntries = u16(boot, 17);
         total = u16(boot, 19) != 0 ? u16(boot, 19) : u32(boot, 32);
         rootSectors = (rootEntries * 32 + 511) / 512;
@@ -81,18 +94,12 @@ public final class Fat16Volume {
         if (firstCluster == 0) {
             for (int i = 0; i < rootSectors; i++) bytes.write(sector(rootStart + i));
         } else {
-            Set<Integer> visited = new HashSet<>();
-            int cluster = firstCluster;
-            while (true) {
-                validCluster(cluster);
-                if (!visited.add(cluster)) throw new IOException("Directory cluster loop detected.");
-                if ((long) bytes.size() + sectorsPerCluster * 512L > 4 * 1024 * 1024) throw new IOException("Directory exceeds the 4 MiB safety limit.");
-                long lba = dataStart + (long) (cluster - 2) * sectorsPerCluster;
+            for (int cluster : directoryChain(firstCluster)) {
+                long lba = clusterLba(cluster);
+                if ((long) bytes.size() + sectorsPerCluster * 512L > 4 * 1024 * 1024) {
+                    throw new IOException("Directory exceeds the 4 MiB safety limit.");
+                }
                 for (int i = 0; i < sectorsPerCluster; i++) bytes.write(sector(lba + i));
-                int next = fatValue(cluster);
-                if (next >= 0xfff8) break;
-                validCluster(next);
-                cluster = next;
             }
         }
         byte[] data = bytes.toByteArray();
@@ -145,21 +152,202 @@ public final class Fat16Volume {
         return entries;
     }
 
+    /**
+     * Create a new 8.3 file in the selected directory. Existing names are never overwritten.
+     * Data clusters are written first, FAT copies second, and the directory entry last.
+     */
+    public synchronized void writeFile(int directoryCluster, String fileName, byte[] data) throws IOException {
+        if (writer == null) throw new IOException("This storage session does not permit writes.");
+        if (data == null) throw new IOException("No file data supplied.");
+        if (data.length > 64 * 1024 * 1024) throw new IOException("Selected file exceeds the 64 MiB transfer safety limit.");
+        byte[] shortRaw = encodeShortName(fileName);
+        String canonical = displayShortName(shortRaw);
+        for (Entry entry : list(directoryCluster)) {
+            if (entry.name.equalsIgnoreCase(canonical)) {
+                throw new IOException("A file or folder named " + canonical + " already exists. EndraLink will not overwrite it.");
+            }
+        }
+        Slot slot = findFreeDirectorySlot(directoryCluster);
+        int clusterBytes = sectorsPerCluster * 512;
+        int needed = data.length == 0 ? 0 : (data.length + clusterBytes - 1) / clusterBytes;
+        List<Integer> allocated = findFreeClusters(needed);
+
+        int position = 0;
+        for (int cluster : allocated) {
+            long lba = clusterLba(cluster);
+            for (int s = 0; s < sectorsPerCluster; s++) {
+                byte[] block = new byte[512];
+                int count = Math.min(512, data.length - position);
+                if (count > 0) System.arraycopy(data, position, block, 0, count);
+                writer.writeSector(lba + s, block);
+                position += Math.max(count, 0);
+            }
+        }
+
+        boolean fatLinked = false;
+        try {
+            for (int i = 0; i < allocated.size(); i++) {
+                int next = i + 1 < allocated.size() ? allocated.get(i + 1) : 0xffff;
+                writeFatValue(allocated.get(i), next);
+            }
+            fatLinked = true;
+
+            byte[] directorySector = sector(slot.lba);
+            boolean wasEnd = u8(directorySector, slot.offset) == 0;
+            Arrays.fill(directorySector, slot.offset, slot.offset + 32, (byte)0);
+            System.arraycopy(shortRaw, 0, directorySector, slot.offset, 11);
+            directorySector[slot.offset + 11] = 0x20;
+            int firstCluster = allocated.isEmpty() ? 0 : allocated.get(0);
+            put16(directorySector, slot.offset + 26, firstCluster);
+            put32(directorySector, slot.offset + 28, data.length);
+            writer.writeSector(slot.lba, directorySector);
+
+            if (wasEnd && slot.offset + 32 < 512) {
+                // Keep an explicit end marker after the new entry when possible.
+                byte[] verify = sector(slot.lba);
+                if (u8(verify, slot.offset + 32) != 0) {
+                    verify[slot.offset + 32] = 0;
+                    writer.writeSector(slot.lba, verify);
+                }
+            }
+        } catch (IOException e) {
+            if (fatLinked) bestEffortFree(allocated);
+            throw e;
+        }
+    }
+
+    private List<Integer> findFreeClusters(int needed) throws IOException {
+        List<Integer> result = new ArrayList<>();
+        if (needed == 0) return result;
+        for (int cluster = 2; cluster <= clusters + 1 && result.size() < needed; cluster++) {
+            if (fatValue(cluster) == 0) result.add(cluster);
+        }
+        if (result.size() != needed) throw new IOException("Not enough free calculator storage for this file.");
+        return result;
+    }
+
+    private Slot findFreeDirectorySlot(int firstCluster) throws IOException {
+        if (firstCluster == 0) {
+            int remaining = rootEntries;
+            for (int s = 0; s < rootSectors; s++) {
+                byte[] block = sector(rootStart + s);
+                int slots = Math.min(16, remaining);
+                for (int i = 0; i < slots; i++) {
+                    int first = u8(block, i * 32);
+                    if (first == 0 || first == 0xe5) return new Slot(rootStart + s, i * 32);
+                }
+                remaining -= slots;
+            }
+        } else {
+            for (int cluster : directoryChain(firstCluster)) {
+                long lba = clusterLba(cluster);
+                for (int s = 0; s < sectorsPerCluster; s++) {
+                    byte[] block = sector(lba + s);
+                    for (int i = 0; i < 16; i++) {
+                        int first = u8(block, i * 32);
+                        if (first == 0 || first == 0xe5) return new Slot(lba + s, i * 32);
+                    }
+                }
+            }
+        }
+        throw new IOException("This calculator folder has no free directory entry. Choose another folder.");
+    }
+
+    private List<Integer> directoryChain(int firstCluster) throws IOException {
+        List<Integer> chain = new ArrayList<>();
+        Set<Integer> visited = new HashSet<>();
+        int cluster = firstCluster;
+        while (true) {
+            validCluster(cluster);
+            if (!visited.add(cluster)) throw new IOException("Directory cluster loop detected.");
+            chain.add(cluster);
+            if ((long) chain.size() * sectorsPerCluster * 512L > 4 * 1024 * 1024) {
+                throw new IOException("Directory exceeds the 4 MiB safety limit.");
+            }
+            int next = fatValue(cluster);
+            if (next >= 0xfff8) break;
+            validCluster(next);
+            cluster = next;
+        }
+        return chain;
+    }
+
+    private long clusterLba(int cluster) throws IOException {
+        validCluster(cluster);
+        return dataStart + (long)(cluster - 2) * sectorsPerCluster;
+    }
+
     private int fatValue(int cluster) throws IOException {
         long lba = fatStart + cluster * 2L / 512;
-        if (lba != cachedFatSector) { cachedFat = sector(lba); cachedFatSector = lba; }
+        if (lba != cachedFatSector) {
+            cachedFat = sector(lba);
+            cachedFatSector = lba;
+        }
         return u16(cachedFat, cluster * 2 % 512);
     }
 
+    private void writeFatValue(int cluster, int value) throws IOException {
+        int sectorIndex = cluster * 2 / 512;
+        int offset = cluster * 2 % 512;
+        for (int copy = 0; copy < fats; copy++) {
+            long lba = fatStart + (long)copy * fatSectors + sectorIndex;
+            byte[] block = sector(lba);
+            put16(block, offset, value);
+            writer.writeSector(lba, block);
+        }
+        cachedFatSector = -1;
+        cachedFat = null;
+    }
+
+    private void bestEffortFree(List<Integer> allocated) {
+        for (int cluster : allocated) {
+            try { writeFatValue(cluster, 0); } catch (IOException ignored) { return; }
+        }
+    }
+
     private void validCluster(int cluster) throws IOException {
-        if (cluster < 2 || cluster >= 0xfff0 || cluster > clusters + 1) throw new IOException("Invalid, free, reserved, or bad FAT16 cluster: " + cluster);
+        if (cluster < 2 || cluster >= 0xfff0 || cluster > clusters + 1) {
+            throw new IOException("Invalid, free, reserved, or bad FAT16 cluster: " + cluster);
+        }
     }
 
     private byte[] sector(long lba) throws IOException {
         if (lba < 0 || lba >= reader.sectorCount()) throw new IOException("Sector outside device.");
         byte[] data = reader.readSector(lba);
         if (data == null || data.length != 512) throw new IOException("Incomplete sector read.");
-        return data;
+        return Arrays.copyOf(data, data.length);
+    }
+
+    private static byte[] encodeShortName(String name) throws IOException {
+        if (name == null) throw new IOException("Selected file has no name.");
+        String trimmed = name.trim();
+        if (trimmed.isEmpty() || trimmed.equals(".") || trimmed.equals("..")) throw new IOException("Invalid file name.");
+        int dot = trimmed.lastIndexOf('.');
+        String base = dot > 0 ? trimmed.substring(0, dot) : trimmed;
+        String ext = dot > 0 ? trimmed.substring(dot + 1) : "";
+        if (base.length() < 1 || base.length() > 8 || ext.length() > 3) {
+            throw new IOException("For this first transfer build, calculator file names must use FAT 8.3 format (up to 8 characters plus a 3-character extension).");
+        }
+        String allowed = "$%'-_@~\u0060!(){}^#&";
+        byte[] raw = new byte[11];
+        Arrays.fill(raw, (byte)' ');
+        String upperBase = base.toUpperCase(Locale.ROOT), upperExt = ext.toUpperCase(Locale.ROOT);
+        for (int i = 0; i < upperBase.length(); i++) raw[i] = shortChar(upperBase.charAt(i), allowed);
+        for (int i = 0; i < upperExt.length(); i++) raw[8 + i] = shortChar(upperExt.charAt(i), allowed);
+        return raw;
+    }
+
+    private static byte shortChar(char c, String allowed) throws IOException {
+        if (c > 127 || !(Character.isLetterOrDigit(c) || allowed.indexOf(c) >= 0)) {
+            throw new IOException("File name contains a character not supported by FAT 8.3.");
+        }
+        return (byte)c;
+    }
+
+    private static String displayShortName(byte[] raw) {
+        String base = new String(raw, 0, 8, Charset.forName("US-ASCII")).trim();
+        String ext = new String(raw, 8, 3, Charset.forName("US-ASCII")).trim();
+        return ext.isEmpty() ? base : base + "." + ext;
     }
 
     private static boolean looksLikeBoot(byte[] b) {
@@ -176,7 +364,7 @@ public final class Fat16Volume {
 
     private static String shortName(byte[] data, int offset) {
         byte[] raw = Arrays.copyOfRange(data, offset, offset + 11);
-        if ((raw[0] & 255) == 5) raw[0] = (byte) 0xe5;
+        if ((raw[0] & 255) == 5) raw[0] = (byte)0xe5;
         String base = new String(raw, 0, 8, Charset.forName("IBM437")).trim();
         String ext = new String(raw, 8, 3, Charset.forName("IBM437")).trim();
         int flags = u8(data, offset + 12);
@@ -190,6 +378,17 @@ public final class Fat16Volume {
         for (int i = 0; i < 11; i++) sum = (((sum & 1) << 7) + (sum >> 1) + u8(data, offset + i)) & 255;
         return sum;
     }
+
+    private static void put16(byte[] b, int p, long value) {
+        b[p] = (byte)value;
+        b[p + 1] = (byte)(value >> 8);
+    }
+
+    private static void put32(byte[] b, int p, long value) {
+        put16(b, p, value);
+        put16(b, p + 2, value >> 16);
+    }
+
     private static int u8(byte[] b, int p) { return b[p] & 255; }
     private static int u16(byte[] b, int p) { return u8(b,p) | (u8(b,p+1) << 8); }
     private static long u32(byte[] b, int p) { return (long)u16(b,p) | ((long)u16(b,p+2) << 16); }

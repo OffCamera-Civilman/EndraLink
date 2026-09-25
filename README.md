@@ -62,3 +62,8 @@ Open the downloaded APK on Android and allow installation from your browser when
 For a connection problem, tap **Export debug log**, save the `.txt` file, and send that file with your report. The log records button taps, USB permission checks, connection attempts, and storage errors without recording calculator file contents.
 
 [All releases and checksums](https://github.com/brandonendall/EndraLink/releases)
+
+
+## 0.1.9 file-transfer testing
+
+This branch enables create-only Android → fx-CG50 FAT16 file transfer for hardware testing. Existing calculator files are not overwritten automatically.

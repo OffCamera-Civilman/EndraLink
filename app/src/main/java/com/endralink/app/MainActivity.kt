@@ -23,7 +23,7 @@ import com.endralink.app.storage.UsbStorageSession
 import java.util.concurrent.Executors
 import java.util.Locale
 
-/** USB connection and read-only FAT16 browser; storage writes are not implemented. */
+/** USB connection, FAT16 browser, and Android-to-calculator file transfer. */
 class MainActivity : AppCompatActivity() {
     private lateinit var status: TextView
     private lateinit var details: TextView
@@ -42,6 +42,8 @@ class MainActivity : AppCompatActivity() {
     private var busy = false
     private var ejecting = false
     private var storage: UsbStorageSession? = null
+    private var selectedUri: Uri? = null
+    private var selectedName: String? = null
     private val folderStack = mutableListOf<Pair<String, Int>>()
     private val permissionAction get() = packageName + ".USB_PERMISSION"
 
@@ -111,7 +113,8 @@ class MainActivity : AppCompatActivity() {
         }, ContextCompat.RECEIVER_NOT_EXPORTED)
         ContextCompat.registerReceiver(this, receiver, IntentFilter(UsbManager.ACTION_USB_DEVICE_DETACHED),
             ContextCompat.RECEIVER_NOT_EXPORTED)
-        findViewById<TextView>(R.id.version).text = "0.1.8 • READ-ONLY PREVIEW"
+        findViewById<TextView>(R.id.version).text = BuildConfig.VERSION_NAME + " • FILE TRANSFER"
+        findViewById<TextView>(R.id.homeVersion).text = "EndraLink " + BuildConfig.VERSION_NAME + " • YOUR CALCULATOR. CONNECTED."
         findViewById<Button>(R.id.copy).isEnabled = false
         disconnect.isEnabled = false
         findViewById<Button>(R.id.openPhone).setOnClickListener {
@@ -132,6 +135,16 @@ class MainActivity : AppCompatActivity() {
             DebugLog.event("TAP", "parent_folder")
             if (folderStack.isNotEmpty()) folderStack.removeAt(folderStack.lastIndex)
             browseDirectory(folderStack.lastOrNull()?.second ?: 0)
+        }
+        findViewById<Button>(R.id.copy).setOnClickListener {
+            val name = selectedName ?: return@setOnClickListener
+            val destination = "/" + folderStack.joinToString("/") { it.first }
+            AlertDialog.Builder(this)
+                .setTitle("Transfer to calculator?")
+                .setMessage(name + "\n\nDestination: " + destination + "\n\nExisting files are never overwritten.")
+                .setPositiveButton("Transfer") { _, _ -> transferSelectedFile() }
+                .setNegativeButton("Cancel", null)
+                .show()
         }
         disconnect.setOnClickListener {
             DebugLog.event("TAP", "eject")
@@ -284,6 +297,7 @@ class MainActivity : AppCompatActivity() {
         disconnect.isEnabled = !ejecting && (busy || connection != null)
         findViewById<Button>(R.id.browse).isEnabled = !busy && connection != null
         findViewById<Button>(R.id.upFolder).isEnabled = !busy && folderStack.isNotEmpty()
+        findViewById<Button>(R.id.copy).isEnabled = !busy && storage != null && selectedUri != null
     }
 
     /** Send a real eject request before releasing ownership; report only confirmed outcomes. */
@@ -436,7 +450,7 @@ class MainActivity : AppCompatActivity() {
     private fun showDirectory(volume: Fat16Volume, entries: List<Fat16Volume.Entry>) {
         setBusy(false)
         status.text = "FAT16 storage ready"
-        details.text = "Read-only access • " + entries.size + " items in this folder"
+        details.text = "FAT16 access • " + entries.size + " items in this folder"
         findViewById<View>(R.id.browserPanel).visibility = View.VISIBLE
         findViewById<TextView>(R.id.storageInfo).text =
             "FAT16 • " + String.format(Locale.ROOT, "%.1f MiB", volume.capacityBytes / 1048576.0) +
@@ -478,7 +492,7 @@ class MainActivity : AppCompatActivity() {
                             }
                         } else {
                             AlertDialog.Builder(this@MainActivity).setTitle(entry.name)
-                                .setMessage(entry.size.toString() + " bytes\n\nRead-only preview. File transfers are not enabled.")
+                                .setMessage(entry.size.toString() + " bytes\n\nAndroid → calculator transfer is enabled. Calculator → Android export is planned for a later build.")
                                 .setPositiveButton("OK", null).show()
                         }
                     }
@@ -528,7 +542,61 @@ class MainActivity : AppCompatActivity() {
                 if (it.moveToFirst()) name = it.getString(0) ?: name
             }
         } catch (_: RuntimeException) { /* Some providers omit display names. */ }
+        selectedUri = uri
+        selectedName = name
         findViewById<TextView>(R.id.progressText).text = "Selected: " + name
+        findViewById<Button>(R.id.copy).isEnabled = !busy && storage != null
+    }
+
+    private fun transferSelectedFile() {
+        if (busy) return
+        val session = storage ?: run {
+            status.text = "Browse calculator storage before transferring a file."
+            return
+        }
+        val uri = selectedUri ?: return
+        val name = selectedName ?: "FILE.BIN"
+        val directoryCluster = folderStack.lastOrNull()?.second ?: 0
+        val request = generation
+        setBusy(true)
+        status.text = "Transferring " + name + "…"
+        details.text = "Do not disconnect the calculator during the transfer."
+        worker.execute {
+            try {
+                val bytes = contentResolver.openInputStream(uri)?.use { input ->
+                    val buffer = java.io.ByteArrayOutputStream()
+                    val chunk = ByteArray(16 * 1024)
+                    var total = 0
+                    while (true) {
+                        val n = input.read(chunk)
+                        if (n < 0) break
+                        total += n
+                        if (total > 64 * 1024 * 1024) throw java.io.IOException("Selected file exceeds the 64 MiB transfer safety limit.")
+                        buffer.write(chunk, 0, n)
+                    }
+                    buffer.toByteArray()
+                } ?: throw java.io.IOException("Could not open the selected Android file.")
+                session.volume.writeFile(directoryCluster, name, bytes)
+                DebugLog.event("TRANSFER_SUCCESS", "bytes=" + bytes.size + " directoryCluster=" + directoryCluster)
+                main.post {
+                    if (!destroyed && generation == request) {
+                        setBusy(false)
+                        status.text = "Transfer complete: " + name
+                        details.text = bytes.size.toString() + " bytes written. Browse the folder to verify the file."
+                        browseDirectory(directoryCluster)
+                    }
+                }
+            } catch (e: Exception) {
+                DebugLog.event("TRANSFER_ERROR", error = e)
+                main.post {
+                    if (!destroyed && generation == request) {
+                        setBusy(false)
+                        status.text = "Transfer failed"
+                        details.text = e.message ?: e.javaClass.simpleName
+                    }
+                }
+            }
+        }
     }
 
     /** Log numeric USB identity and endpoint layout, never serial numbers or user file names. */
