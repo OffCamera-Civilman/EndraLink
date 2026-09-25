@@ -50,6 +50,13 @@
                     android:layout_marginTop="8dp" android:text="/" android:textSize="18sp" android:textColor="@color/silver"/>
                 <Button android:id="@+id/upFolder" style="@style/TechButton"
                     android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Parent folder"/>
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+                    <Button android:id="@+id/newCalcFile" style="@style/TechButton"
+                        android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="New file"/>
+                    <Button android:id="@+id/newCalcFolder" style="@style/TechButton"
+                        android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
+                        android:layout_marginStart="8dp" android:text="New folder"/>
+                </LinearLayout>
                 <LinearLayout android:id="@+id/fileList" android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:orientation="vertical"/>
             </LinearLayout>
@@ -88,7 +95,7 @@
         <Button android:id="@+id/exportLog" style="@style/TechButton"
             android:layout_width="wrap_content" android:layout_gravity="center_horizontal" android:layout_height="wrap_content" android:text="Export debug log"/>
         <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp"
-            android:text="Android → calculator transfer enabled. Existing files require confirmation before overwrite."
+            android:text="Two-way EndraLink file manager enabled. Existing files require confirmation before overwrite."
             android:textSize="12sp" android:gravity="center" android:textColor="@color/muted" android:paddingBottom="16dp"/>
         <com.endralink.app.ArtworkView android:id="@+id/workspaceFooter" android:layout_width="match_parent" android:layout_height="wrap_content"/>
     </LinearLayout>
