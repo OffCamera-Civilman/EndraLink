@@ -43,8 +43,8 @@ class MainActivity : AppCompatActivity() {
     private var ejecting = false
     private var transferring = false
     private var storage: UsbStorageSession? = null
-    private var selectedUri: Uri? = null
-    private var selectedName: String? = null
+    private data class PendingFile(val uri: Uri, val name: String)
+    private val selectedFiles = mutableListOf<PendingFile>()
     private val folderStack = mutableListOf<Pair<String, Int>>()
     private val permissionAction get() = packageName + ".USB_PERMISSION"
 
@@ -120,12 +120,17 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.copy).isEnabled = false
         disconnect.isEnabled = false
         findViewById<Button>(R.id.openPhone).setOnClickListener {
-            DebugLog.event("TAP", "choose_local_file")
+            DebugLog.event("TAP", "choose_local_files")
             startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)
                 type = "*/*"
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
             }, 1001)
+        }
+        findViewById<Button>(R.id.clearQueue).setOnClickListener {
+            selectedFiles.clear()
+            renderLocalQueue()
         }
         connect.setOnClickListener { DebugLog.event("TAP", "connect"); findCalculator() }
         findViewById<Button>(R.id.browse).setOnClickListener {
@@ -277,7 +282,7 @@ class MainActivity : AppCompatActivity() {
                     connect.isEnabled = false
                     disconnect.isEnabled = true
                     status.text = "USB connection open"
-                    details.text = describe(device) + "\nPermission granted. Tap Browse calculator to read FAT16 storage."
+                    details.text = describe(device) + "\nPermission granted. Select files and transfer directly, or Browse calculator to choose a folder."
                 }
             }
         }
@@ -301,9 +306,10 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.upFolder).isEnabled = !busy && folderStack.isNotEmpty()
         findViewById<Button>(R.id.collapseBrowser).isEnabled = !busy
         findViewById<Button>(R.id.openPhone).isEnabled = !busy
+        findViewById<Button>(R.id.clearQueue).isEnabled = !busy && selectedFiles.isNotEmpty()
         findViewById<Button>(R.id.exportLog).isEnabled = !busy
         findViewById<Button>(R.id.homeBack).isEnabled = !busy
-        findViewById<Button>(R.id.copy).isEnabled = !busy && storage != null && selectedUri != null
+        findViewById<Button>(R.id.copy).isEnabled = !busy && connection != null && selectedFiles.isNotEmpty()
         findViewById<ProgressBar>(R.id.transferProgress).visibility = if (transferring) View.VISIBLE else View.GONE
     }
 
@@ -319,6 +325,8 @@ class MainActivity : AppCompatActivity() {
         findViewById<View>(R.id.workspaceHeader).visibility = if (active) View.GONE else View.VISIBLE
         findViewById<View>(R.id.workspaceFooter).visibility = if (active) View.GONE else View.VISIBLE
         findViewById<Button>(R.id.openPhone).visibility = if (active) View.GONE else View.VISIBLE
+        findViewById<Button>(R.id.clearQueue).visibility = if (active) View.GONE else View.VISIBLE
+        findViewById<View>(R.id.localFileList).visibility = if (active) View.GONE else View.VISIBLE
         findViewById<Button>(R.id.copy).visibility = if (active) View.GONE else View.VISIBLE
         findViewById<ProgressBar>(R.id.transferProgress).visibility = if (active) View.VISIBLE else View.GONE
     }
@@ -560,51 +568,165 @@ class MainActivity : AppCompatActivity() {
             if (resultCode == Activity.RESULT_OK) data?.data?.let { exportLog(it) }
             return
         }
-        if (requestCode != 1001 || resultCode != Activity.RESULT_OK) return
-        val uri = data?.data ?: return
-        var name = "Selected file"
+        if (requestCode != 1001 || resultCode != Activity.RESULT_OK || data == null) return
+
+        val picked = mutableListOf<Uri>()
+        data.clipData?.let { clip ->
+            for (i in 0 until clip.itemCount) picked.add(clip.getItemAt(i).uri)
+        }
+        data.data?.let { if (!picked.contains(it)) picked.add(it) }
+
+        picked.forEach { uri ->
+            runCatching {
+                contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            val name = displayName(uri)
+            if (selectedFiles.none { it.uri == uri }) selectedFiles.add(PendingFile(uri, name))
+        }
+        DebugLog.event("LOCAL_FILES_SELECTED", "added=" + picked.size + " queued=" + selectedFiles.size)
+        renderLocalQueue()
+    }
+
+    private fun displayName(uri: Uri): String {
+        var name = uri.lastPathSegment ?: "Selected file"
         try {
             contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
                 if (it.moveToFirst()) name = it.getString(0) ?: name
             }
-        } catch (_: RuntimeException) { /* Some providers omit display names. */ }
-        selectedUri = uri
-        selectedName = name
-        findViewById<TextView>(R.id.progressText).text = "Selected: " + name
-        findViewById<Button>(R.id.copy).isEnabled = !busy && storage != null
+        } catch (_: RuntimeException) { }
+        return name
+    }
+
+    private fun renderLocalQueue() {
+        val list = findViewById<LinearLayout>(R.id.localFileList)
+        list.removeAllViews()
+        findViewById<TextView>(R.id.progressText).text = when (selectedFiles.size) {
+            0 -> "No files selected"
+            1 -> "1 file selected"
+            else -> selectedFiles.size.toString() + " files selected"
+        }
+        selectedFiles.forEachIndexed { index, file ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+            }
+            row.addView(TextView(this).apply {
+                text = file.name
+                setTextColor(ContextCompat.getColor(context, R.color.silver))
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                setPadding(dp(4), dp(8), dp(8), dp(8))
+            })
+            row.addView(Button(this).apply {
+                text = "Remove"
+                isAllCaps = false
+                setOnClickListener {
+                    if (!busy && index < selectedFiles.size) {
+                        selectedFiles.removeAt(index)
+                        renderLocalQueue()
+                    }
+                }
+            })
+            list.addView(row)
+        }
+        findViewById<Button>(R.id.clearQueue).isEnabled = !busy && selectedFiles.isNotEmpty()
+        findViewById<Button>(R.id.copy).isEnabled = !busy && connection != null && selectedFiles.isNotEmpty()
     }
 
     private fun confirmTransfer() {
-        if (busy) return
-        val session = storage ?: run {
-            status.text = "Browse calculator storage before transferring a file."
+        if (busy || selectedFiles.isEmpty()) return
+        if (connection == null) {
+            status.text = "Connect the fx-CG50 before transferring."
             return
         }
-        val name = selectedName ?: return
+        val session = storage
+        if (session == null) {
+            prepareStorageForTransfer(false)
+        } else {
+            preflightTransfer(session)
+        }
+    }
+
+    /** Initialize calculator storage automatically so Browse calculator is optional for root transfers. */
+    private fun prepareStorageForTransfer(directAccess: Boolean) {
+        if (busy) return
+        val handle = connection ?: return
+        val device = activeDevice ?: return
+        val intf = storageInterface(device) ?: return
+        val request = generation
+        setBusy(true)
+        status.text = "Preparing calculator storage…"
+        details.text = "Browse is optional. EndraLink is opening the calculator root folder for transfer."
+        worker.execute {
+            try {
+                val opened = UsbStorageSession(handle, intf, directAccess) {
+                    destroyed || generation != request
+                }
+                val free = opened.volume.freeBytes()
+                main.post {
+                    if (destroyed || generation != request) {
+                        opened.close()
+                    } else {
+                        storage = opened
+                        setBusy(false)
+                        status.text = "Calculator storage ready"
+                        details.text = formatMiB(free) + " free / " + formatMiB(opened.volume.capacityBytes)
+                        preflightTransfer(opened)
+                    }
+                }
+            } catch (e: Exception) {
+                DebugLog.event("TRANSFER_STORAGE_PREP_ERROR", "directAccess=" + directAccess, e)
+                main.post {
+                    if (!destroyed && generation == request) {
+                        setBusy(false)
+                        if (e is UsbStorageSession.InterfaceBusyException && !directAccess) {
+                            AlertDialog.Builder(this)
+                                .setTitle("Use direct calculator access?")
+                                .setMessage("Android is currently holding the calculator storage. EndraLink can take direct USB access so you can transfer without opening Browse calculator first.")
+                                .setPositiveButton("Use direct access") { _, _ -> prepareStorageForTransfer(true) }
+                                .setNegativeButton("Cancel", null)
+                                .show()
+                        } else {
+                            status.text = "Could not prepare calculator storage"
+                            details.text = e.message ?: e.javaClass.simpleName
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun preflightTransfer(session: UsbStorageSession) {
+        if (busy || selectedFiles.isEmpty()) return
+        val files = selectedFiles.toList()
         val directoryCluster = folderStack.lastOrNull()?.second ?: 0
         val request = generation
         setBusy(true)
-        status.text = "Checking destination…"
+        status.text = "Checking " + files.size + " file" + if (files.size == 1) "…" else "s…"
         worker.execute {
             try {
-                val exists = session.volume.containsName(directoryCluster, name)
+                val conflicts = files.filter { session.volume.containsName(directoryCluster, it.name) }
                 main.post {
                     if (!destroyed && generation == request) {
                         setBusy(false)
                         val destination = "/" + folderStack.joinToString("/") { it.first }
-                        if (exists) {
+                        if (conflicts.isNotEmpty()) {
+                            val names = conflicts.take(8).joinToString("\n") { "• " + it.name } +
+                                if (conflicts.size > 8) "\n• …and " + (conflicts.size - 8) + " more" else ""
                             AlertDialog.Builder(this)
-                                .setTitle("Overwrite existing file?")
-                                .setMessage(name + "\n\nDestination: " + destination +
-                                    "\n\nA file with this name already exists. Replace it?")
-                                .setPositiveButton("Overwrite") { _, _ -> transferSelectedFile(true) }
+                                .setTitle("Overwrite existing files?")
+                                .setMessage(conflicts.size.toString() + " selected file" +
+                                    if (conflicts.size == 1) " already exists:\n\n" else "s already exist:\n\n" +
+                                    names + "\n\nDestination: " + destination +
+                                    "\n\nOnly files with matching names will be replaced.")
+                                .setPositiveButton("Overwrite") { _, _ -> transferSelectedFiles(true) }
                                 .setNegativeButton("Cancel", null)
                                 .show()
                         } else {
                             AlertDialog.Builder(this)
-                                .setTitle("Transfer to calculator?")
-                                .setMessage(name + "\n\nDestination: " + destination)
-                                .setPositiveButton("Transfer") { _, _ -> transferSelectedFile(false) }
+                                .setTitle("Transfer selected files?")
+                                .setMessage(files.size.toString() + " file" +
+                                    if (files.size == 1) "" else "s" + "\n\nDestination: " + destination)
+                                .setPositiveButton("Transfer") { _, _ -> transferSelectedFiles(false) }
                                 .setNegativeButton("Cancel", null)
                                 .show()
                         }
@@ -623,63 +745,81 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun transferSelectedFile(overwrite: Boolean) {
-        if (busy) return
+    private fun transferSelectedFiles(overwriteConflicts: Boolean) {
+        if (busy || selectedFiles.isEmpty()) return
         val session = storage ?: return
-        val uri = selectedUri ?: return
-        val name = selectedName ?: "FILE.BIN"
+        val files = selectedFiles.toList()
         val directoryCluster = folderStack.lastOrNull()?.second ?: 0
         val request = generation
         transferring = true
         setTransferMode(true)
         setBusy(true)
-        status.text = "Transferring " + name + "…"
+        status.text = "Transferring " + files.size + " file" + if (files.size == 1) "…" else "s…"
         details.text = "Do not disconnect the calculator."
-        findViewById<TextView>(R.id.progressText).text = "Transferring: " + name
         worker.execute {
+            var completed = 0
+            var currentName = ""
             try {
-                val bytes = contentResolver.openInputStream(uri)?.use { input ->
-                    val buffer = java.io.ByteArrayOutputStream()
-                    val chunk = ByteArray(16 * 1024)
-                    var total = 0
-                    while (true) {
-                        val n = input.read(chunk)
-                        if (n < 0) break
-                        total += n
-                        if (total > 64 * 1024 * 1024) throw java.io.IOException("Selected file exceeds the 64 MiB transfer safety limit.")
-                        buffer.write(chunk, 0, n)
+                files.forEachIndexed { index, file ->
+                    currentName = file.name
+                    main.post {
+                        if (!destroyed && generation == request) {
+                            findViewById<TextView>(R.id.progressText).text =
+                                "Transferring " + (index + 1) + " of " + files.size + ": " + file.name
+                        }
                     }
-                    buffer.toByteArray()
-                } ?: throw java.io.IOException("Could not open the selected Android file.")
+                    val bytes = contentResolver.openInputStream(file.uri)?.use { input ->
+                        val buffer = java.io.ByteArrayOutputStream()
+                        val chunk = ByteArray(16 * 1024)
+                        var total = 0
+                        while (true) {
+                            val n = input.read(chunk)
+                            if (n < 0) break
+                            total += n
+                            if (total > 64 * 1024 * 1024)
+                                throw java.io.IOException(file.name + " exceeds the 64 MiB per-file safety limit.")
+                            buffer.write(chunk, 0, n)
+                        }
+                        buffer.toByteArray()
+                    } ?: throw java.io.IOException("Could not open " + file.name)
 
-                val storedName = session.volume.writeFile(directoryCluster, name, bytes, overwrite)
+                    session.volume.writeFile(directoryCluster, file.name, bytes, overwriteConflicts)
+                    completed++
+                    DebugLog.event("TRANSFER_FILE_SUCCESS", "index=" + index + " bytes=" + bytes.size)
+                }
+
                 val free = session.volume.freeBytes()
-                DebugLog.event("TRANSFER_SUCCESS", "bytes=" + bytes.size + " directoryCluster=" +
-                    directoryCluster + " storedName=" + storedName + " overwrite=" + overwrite)
                 main.post {
                     if (!destroyed && generation == request) {
                         transferring = false
                         setTransferMode(false)
                         setBusy(false)
                         status.text = "Transfer complete"
-                        details.text = storedName + " • " + bytes.size + " bytes transferred successfully."
-                        findViewById<TextView>(R.id.progressText).text = "✓ Transfer complete: " + storedName
+                        details.text = completed.toString() + " of " + files.size + " files transferred successfully."
+                        findViewById<TextView>(R.id.progressText).text =
+                            "✓ Transfer complete: " + completed + " file" + if (completed == 1) "" else "s"
                         findViewById<TextView>(R.id.storageInfo).text =
                             "FAT16 • " + formatMiB(free) + " free / " + formatMiB(session.volume.capacityBytes) +
                                 if (session.volume.label.isNotBlank()) " • " + session.volume.label else ""
-                        Toast.makeText(this, "Transfer complete: " + storedName, Toast.LENGTH_LONG).show()
+                        selectedFiles.clear()
+                        renderLocalQueue()
+                        Toast.makeText(this, "Transfer complete: " + completed + " file" +
+                            if (completed == 1) "" else "s", Toast.LENGTH_LONG).show()
                     }
                 }
             } catch (e: Exception) {
-                DebugLog.event("TRANSFER_ERROR", error = e)
+                DebugLog.event("TRANSFER_ERROR", "completed=" + completed + " current=" + currentName, e)
                 main.post {
                     if (!destroyed && generation == request) {
                         transferring = false
                         setTransferMode(false)
                         setBusy(false)
-                        status.text = "Transfer failed"
-                        details.text = e.message ?: e.javaClass.simpleName
-                        findViewById<TextView>(R.id.progressText).text = "Transfer failed: " + (e.message ?: "Unknown error")
+                        status.text = "Transfer stopped"
+                        details.text = completed.toString() + " of " + files.size +
+                            " files completed. " + (e.message ?: e.javaClass.simpleName)
+                        findViewById<TextView>(R.id.progressText).text =
+                            "Transfer stopped at " + currentName
+                        renderLocalQueue()
                     }
                 }
             }
