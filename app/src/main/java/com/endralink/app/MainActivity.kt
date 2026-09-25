@@ -14,6 +14,8 @@ import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.core.app.ActivityCompat
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -43,7 +45,10 @@ class MainActivity : AppCompatActivity() {
     private var busy = false
     private var ejecting = false
     private var transferring = false
+    private var transferTotalItems = 0
     private var storage: UsbStorageSession? = null
+    private val transferChannelId = "endralink_transfers"
+    private val transferNotificationId = 4102
     private data class PendingItem(val uri: Uri, val name: String, val directory: Boolean)
     private data class PhoneEntry(val uri: Uri, val name: String, val directory: Boolean, val size: Long)
     private val selectedFiles = mutableListOf<PendingItem>()
@@ -123,6 +128,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.homeVersion).text = "EndraLink " + appVersion + " • YOUR CALCULATOR. CONNECTED."
         findViewById<Button>(R.id.copy).isEnabled = false
         disconnect.isEnabled = false
+        createTransferNotificationChannel()
         findViewById<Button>(R.id.openPhone).setOnClickListener {
             DebugLog.event("TAP", "choose_phone_tree")
             startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
@@ -583,8 +589,7 @@ class MainActivity : AppCompatActivity() {
         }
         if (requestCode != 1004 || resultCode != Activity.RESULT_OK) return
         val tree = data?.data ?: return
-        val takeFlags = data.flags and
-            (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        val takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
         runCatching { contentResolver.takePersistableUriPermission(tree, takeFlags) }
         getSharedPreferences("endralink", MODE_PRIVATE).edit().putString("phoneTree", tree.toString()).apply()
         openPhoneTree(tree)
@@ -738,6 +743,75 @@ class MainActivity : AppCompatActivity() {
         }
         findViewById<Button>(R.id.clearQueue).isEnabled = !busy && selectedFiles.isNotEmpty()
         findViewById<Button>(R.id.copy).isEnabled = !busy && connection != null && selectedFiles.isNotEmpty()
+    }
+
+    private fun createTransferNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                transferChannelId,
+                "EndraLink transfers",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "File and folder transfer progress to connected calculators"
+                setShowBadge(false)
+            }
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        }
+    }
+
+    private fun transferNotification(progressValue: Int, total: Int, message: String, complete: Boolean = false) {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
+
+        val openApp = PendingIntent.getActivity(
+            this, 0, Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val builder = NotificationCompat.Builder(this, transferChannelId)
+            .setSmallIcon(R.drawable.endralink_logo)
+            .setContentTitle(if (complete) "EndraLink transfer complete" else "EndraLink transferring")
+            .setContentText(message)
+            .setSubText("fx-CG50")
+            .setContentIntent(openApp)
+            .setOnlyAlertOnce(true)
+            .setOngoing(!complete)
+            .setAutoCancel(complete)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+
+        if (complete) builder.setProgress(0, 0, false)
+        else if (total > 0) builder.setProgress(total, progressValue.coerceIn(0, total), false)
+        else builder.setProgress(0, 0, true)
+
+        runCatching { NotificationManagerCompat.from(this).notify(transferNotificationId, builder.build()) }
+    }
+
+    private fun transferNotificationFailed(message: String) {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
+        val openApp = PendingIntent.getActivity(
+            this, 0, Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val notification = NotificationCompat.Builder(this, transferChannelId)
+            .setSmallIcon(R.drawable.endralink_logo)
+            .setContentTitle("EndraLink transfer stopped")
+            .setContentText(message)
+            .setContentIntent(openApp)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .build()
+        runCatching { NotificationManagerCompat.from(this).notify(transferNotificationId, notification) }
+    }
+
+    private fun countPhoneItems(item: PendingItem, depth: Int = 0): Int {
+        if (depth > 32) throw java.io.IOException("Folder nesting exceeds the 32-level safety limit.")
+        if (!item.directory) return 1
+        var count = 1
+        queryPhoneChildren(item.uri).forEach { child ->
+            count += countPhoneItems(PendingItem(child.uri, child.name, child.directory), depth + 1)
+            if (count > 10000) throw java.io.IOException("Transfer exceeds the 10,000-item safety limit.")
+        }
+        return count
     }
 
     private fun confirmTransfer() {
@@ -899,6 +973,10 @@ class MainActivity : AppCompatActivity() {
             val visited = intArrayOf(0)
             var currentName = ""
             try {
+                transferTotalItems = items.sumOf { countPhoneItems(it) }
+                main.post {
+                    transferNotification(0, transferTotalItems, "Preparing " + transferTotalItems + " items…")
+                }
                 items.forEach { item ->
                     currentName = item.name
                     transferPhoneItem(session.volume, directoryCluster, item, item.name,
@@ -922,6 +1000,8 @@ class MainActivity : AppCompatActivity() {
                         selectedFiles.clear()
                         renderLocalQueue()
                         renderPhoneDirectory()
+                        transferNotification(transferTotalItems, transferTotalItems,
+                            completed[0].toString() + " files • " + completed[1] + " folders", true)
                         Toast.makeText(this, "Transfer complete", Toast.LENGTH_LONG).show()
                     }
                 }
@@ -937,6 +1017,7 @@ class MainActivity : AppCompatActivity() {
                         details.text = completed[0].toString() + " files and " + completed[1] +
                             " folders completed. " + (e.message ?: e.javaClass.simpleName)
                         findViewById<TextView>(R.id.progressText).text = "Transfer stopped at " + currentName
+                        transferNotificationFailed("Stopped at " + currentName)
                         renderLocalQueue()
                         renderPhoneDirectory()
                     }
@@ -959,10 +1040,20 @@ class MainActivity : AppCompatActivity() {
         if (depth > 32) throw java.io.IOException("Folder nesting exceeds the 32-level safety limit.")
         visited[0]++
         if (visited[0] > 10000) throw java.io.IOException("Transfer exceeds the 10,000-item safety limit.")
+        main.post {
+            if (!destroyed && generation == request) {
+                transferNotification(visited[0] - 1, transferTotalItems, path)
+            }
+        }
 
         if (item.directory) {
             val destination = volume.ensureDirectory(targetCluster, item.name)
             completed[1]++
+            main.post {
+                if (!destroyed && generation == request) {
+                    transferNotification(visited[0], transferTotalItems, path)
+                }
+            }
             val children = queryPhoneChildren(item.uri)
             children.forEach { child ->
                 transferPhoneItem(volume, destination,
@@ -993,6 +1084,11 @@ class MainActivity : AppCompatActivity() {
             } ?: throw java.io.IOException("Could not open " + path)
             volume.writeFile(targetCluster, item.name, bytes, overwriteConflicts)
             completed[0]++
+            main.post {
+                if (!destroyed && generation == request) {
+                    transferNotification(visited[0], transferTotalItems, path)
+                }
+            }
             DebugLog.event("TRANSFER_FILE_SUCCESS", "bytes=" + bytes.size + " depth=" + depth)
         }
     }
