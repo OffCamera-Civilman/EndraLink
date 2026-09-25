@@ -612,7 +612,7 @@ class MainActivity : AppCompatActivity() {
         val input = EditText(this).apply {
             setText(entry.name)
             setSelection(text.length)
-            singleLine = true
+            setSingleLine(true)
         }
         AlertDialog.Builder(this)
             .setTitle("Rename " + if (entry.directory) "folder" else "file")
@@ -687,7 +687,7 @@ class MainActivity : AppCompatActivity() {
     private fun promptCreateCalculatorItem(directory: Boolean) {
         val input = EditText(this).apply {
             hint = if (directory) "Folder name" else "File name"
-            singleLine = true
+            setSingleLine(true)
         }
         AlertDialog.Builder(this)
             .setTitle(if (directory) "New calculator folder" else "New calculator file")
