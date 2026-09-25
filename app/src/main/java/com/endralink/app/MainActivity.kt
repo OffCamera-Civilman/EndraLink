@@ -8,6 +8,7 @@ import android.hardware.usb.*
 import android.net.Uri
 import android.os.*
 import android.provider.OpenableColumns
+import android.provider.DocumentsContract
 import android.view.View
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
@@ -43,8 +44,11 @@ class MainActivity : AppCompatActivity() {
     private var ejecting = false
     private var transferring = false
     private var storage: UsbStorageSession? = null
-    private data class PendingFile(val uri: Uri, val name: String)
-    private val selectedFiles = mutableListOf<PendingFile>()
+    private data class PendingItem(val uri: Uri, val name: String, val directory: Boolean)
+    private data class PhoneEntry(val uri: Uri, val name: String, val directory: Boolean, val size: Long)
+    private val selectedFiles = mutableListOf<PendingItem>()
+    private var phoneTreeUri: Uri? = null
+    private val phoneStack = mutableListOf<Pair<String, Uri>>()
     private val folderStack = mutableListOf<Pair<String, Int>>()
     private val permissionAction get() = packageName + ".USB_PERMISSION"
 
@@ -120,17 +124,22 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.copy).isEnabled = false
         disconnect.isEnabled = false
         findViewById<Button>(R.id.openPhone).setOnClickListener {
-            DebugLog.event("TAP", "choose_local_files")
-            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-                addCategory(Intent.CATEGORY_OPENABLE)
-                type = "*/*"
-                putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-            }, 1001)
+            DebugLog.event("TAP", "choose_phone_tree")
+            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
+            }, 1004)
+        }
+        findViewById<Button>(R.id.phoneUp).setOnClickListener {
+            if (phoneStack.size > 1) {
+                phoneStack.removeAt(phoneStack.lastIndex)
+                renderPhoneDirectory()
+            }
         }
         findViewById<Button>(R.id.clearQueue).setOnClickListener {
             selectedFiles.clear()
             renderLocalQueue()
+            renderPhoneDirectory()
         }
         connect.setOnClickListener { DebugLog.event("TAP", "connect"); findCalculator() }
         findViewById<Button>(R.id.browse).setOnClickListener {
@@ -158,6 +167,7 @@ class MainActivity : AppCompatActivity() {
             ejectCalculator()
         }
         findViewById<Button>(R.id.exportLog).setOnClickListener { requestLogExport() }
+        restorePhoneTree()
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this,
                 Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1002)
@@ -306,6 +316,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.upFolder).isEnabled = !busy && folderStack.isNotEmpty()
         findViewById<Button>(R.id.collapseBrowser).isEnabled = !busy
         findViewById<Button>(R.id.openPhone).isEnabled = !busy
+        findViewById<Button>(R.id.phoneUp).isEnabled = !busy && phoneStack.size > 1
         findViewById<Button>(R.id.clearQueue).isEnabled = !busy && selectedFiles.isNotEmpty()
         findViewById<Button>(R.id.exportLog).isEnabled = !busy
         findViewById<Button>(R.id.homeBack).isEnabled = !busy
@@ -325,7 +336,9 @@ class MainActivity : AppCompatActivity() {
         findViewById<View>(R.id.workspaceHeader).visibility = if (active) View.GONE else View.VISIBLE
         findViewById<View>(R.id.workspaceFooter).visibility = if (active) View.GONE else View.VISIBLE
         findViewById<Button>(R.id.openPhone).visibility = if (active) View.GONE else View.VISIBLE
+        findViewById<Button>(R.id.phoneUp).visibility = if (active) View.GONE else View.VISIBLE
         findViewById<Button>(R.id.clearQueue).visibility = if (active) View.GONE else View.VISIBLE
+        findViewById<View>(R.id.phoneFileBrowser).visibility = if (active) View.GONE else View.VISIBLE
         findViewById<View>(R.id.localFileList).visibility = if (active) View.GONE else View.VISIBLE
         findViewById<Button>(R.id.copy).visibility = if (active) View.GONE else View.VISIBLE
         findViewById<ProgressBar>(R.id.transferProgress).visibility = if (active) View.VISIBLE else View.GONE
@@ -560,7 +573,7 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
-    @Deprecated("Legacy file picker callback")
+    @Deprecated("Legacy picker callback")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         DebugLog.event("PICKER_RESULT", "request=" + requestCode + " result=" + resultCode)
@@ -568,50 +581,144 @@ class MainActivity : AppCompatActivity() {
             if (resultCode == Activity.RESULT_OK) data?.data?.let { exportLog(it) }
             return
         }
-        if (requestCode != 1001 || resultCode != Activity.RESULT_OK || data == null) return
-
-        val picked = mutableListOf<Uri>()
-        data.clipData?.let { clip ->
-            for (i in 0 until clip.itemCount) picked.add(clip.getItemAt(i).uri)
-        }
-        data.data?.let { if (!picked.contains(it)) picked.add(it) }
-
-        picked.forEach { uri ->
-            runCatching {
-                contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            val name = displayName(uri)
-            if (selectedFiles.none { it.uri == uri }) selectedFiles.add(PendingFile(uri, name))
-        }
-        DebugLog.event("LOCAL_FILES_SELECTED", "added=" + picked.size + " queued=" + selectedFiles.size)
-        renderLocalQueue()
+        if (requestCode != 1004 || resultCode != Activity.RESULT_OK) return
+        val tree = data?.data ?: return
+        val takeFlags = data.flags and
+            (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        runCatching { contentResolver.takePersistableUriPermission(tree, takeFlags) }
+        getSharedPreferences("endralink", MODE_PRIVATE).edit().putString("phoneTree", tree.toString()).apply()
+        openPhoneTree(tree)
     }
 
-    private fun displayName(uri: Uri): String {
-        var name = uri.lastPathSegment ?: "Selected file"
-        try {
-            contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
-                if (it.moveToFirst()) name = it.getString(0) ?: name
+    private fun restorePhoneTree() {
+        val saved = getSharedPreferences("endralink", MODE_PRIVATE).getString("phoneTree", null) ?: return
+        runCatching { openPhoneTree(Uri.parse(saved)) }.onFailure {
+            getSharedPreferences("endralink", MODE_PRIVATE).edit().remove("phoneTree").apply()
+        }
+    }
+
+    private fun openPhoneTree(tree: Uri) {
+        phoneTreeUri = tree
+        val root = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
+        phoneStack.clear()
+        phoneStack.add("Phone folder" to root)
+        findViewById<Button>(R.id.openPhone).text = "Change phone folder"
+        renderPhoneDirectory()
+    }
+
+    private fun queryPhoneChildren(folder: Uri): List<PhoneEntry> {
+        val tree = phoneTreeUri ?: return emptyList()
+        val id = DocumentsContract.getDocumentId(folder)
+        val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, id)
+        val cols = arrayOf(
+            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            DocumentsContract.Document.COLUMN_MIME_TYPE,
+            DocumentsContract.Document.COLUMN_SIZE
+        )
+        val result = mutableListOf<PhoneEntry>()
+        contentResolver.query(children, cols, null, null, null)?.use { cursor ->
+            val idCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+            val nameCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+            val mimeCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
+            val sizeCol = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE)
+            while (cursor.moveToNext()) {
+                val childId = cursor.getString(idCol)
+                val name = cursor.getString(nameCol) ?: childId
+                val mime = cursor.getString(mimeCol)
+                val child = DocumentsContract.buildDocumentUriUsingTree(tree, childId)
+                result.add(PhoneEntry(child, name, mime == DocumentsContract.Document.MIME_TYPE_DIR,
+                    if (sizeCol >= 0 && !cursor.isNull(sizeCol)) cursor.getLong(sizeCol) else 0L))
             }
-        } catch (_: RuntimeException) { }
-        return name
+        }
+        return result.sortedWith(compareBy<PhoneEntry> { !it.directory }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.name })
+    }
+
+    private fun renderPhoneDirectory() {
+        val current = phoneStack.lastOrNull()?.second ?: run {
+            findViewById<TextView>(R.id.phonePath).text = "Grant a phone folder once, then browse it here."
+            findViewById<LinearLayout>(R.id.phoneFileBrowser).removeAllViews()
+            findViewById<Button>(R.id.phoneUp).isEnabled = false
+            return
+        }
+        findViewById<TextView>(R.id.phonePath).text = "Loading " + phoneStack.joinToString("/") { it.first } + "…"
+        worker.execute {
+            try {
+                val entries = queryPhoneChildren(current)
+                main.post {
+                    if (!destroyed && phoneStack.lastOrNull()?.second == current) {
+                        findViewById<TextView>(R.id.phonePath).text = phoneStack.joinToString("/") { it.first }
+                        findViewById<Button>(R.id.phoneUp).isEnabled = !busy && phoneStack.size > 1
+                        val list = findViewById<LinearLayout>(R.id.phoneFileBrowser)
+                        list.removeAllViews()
+                        if (entries.isEmpty()) {
+                            list.addView(TextView(this).apply {
+                                text = "This phone folder is empty."
+                                setTextColor(ContextCompat.getColor(context, R.color.muted))
+                                setPadding(dp(4), dp(10), dp(4), dp(10))
+                            })
+                        }
+                        entries.take(300).forEach { entry ->
+                            val row = LinearLayout(this).apply {
+                                orientation = LinearLayout.HORIZONTAL
+                                gravity = android.view.Gravity.CENTER_VERTICAL
+                            }
+                            val check = CheckBox(this).apply {
+                                isChecked = selectedFiles.any { it.uri == entry.uri }
+                                setOnCheckedChangeListener { _, checked ->
+                                    if (checked) {
+                                        if (selectedFiles.none { it.uri == entry.uri })
+                                            selectedFiles.add(PendingItem(entry.uri, entry.name, entry.directory))
+                                    } else selectedFiles.removeAll { it.uri == entry.uri }
+                                    renderLocalQueue()
+                                }
+                            }
+                            row.addView(check)
+                            row.addView(TextView(this).apply {
+                                text = (if (entry.directory) "📁 " else "📄 ") + entry.name +
+                                    if (!entry.directory && entry.size > 0) "\n" + entry.size + " bytes" else ""
+                                setTextColor(ContextCompat.getColor(context, if (entry.directory) R.color.cyan else R.color.silver))
+                                textSize = 15f
+                                setPadding(dp(4), dp(10), dp(4), dp(10))
+                                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                                setOnClickListener {
+                                    if (entry.directory && !busy) {
+                                        phoneStack.add(entry.name to entry.uri)
+                                        renderPhoneDirectory()
+                                    } else if (!busy) {
+                                        check.isChecked = !check.isChecked
+                                    }
+                                }
+                            })
+                            list.addView(row)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                DebugLog.event("PHONE_BROWSER_ERROR", error = e)
+                main.post {
+                    findViewById<TextView>(R.id.phonePath).text =
+                        "Phone folder permission is unavailable. Tap Change phone folder."
+                }
+            }
+        }
     }
 
     private fun renderLocalQueue() {
         val list = findViewById<LinearLayout>(R.id.localFileList)
         list.removeAllViews()
         findViewById<TextView>(R.id.progressText).text = when (selectedFiles.size) {
-            0 -> "No files selected"
-            1 -> "1 file selected"
-            else -> selectedFiles.size.toString() + " files selected"
+            0 -> "No files or folders selected"
+            1 -> "1 item selected"
+            else -> selectedFiles.size.toString() + " items selected"
         }
-        selectedFiles.forEachIndexed { index, file ->
+        selectedFiles.forEachIndexed { index, item ->
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = android.view.Gravity.CENTER_VERTICAL
             }
             row.addView(TextView(this).apply {
-                text = file.name
+                text = (if (item.directory) "📁 " else "📄 ") + item.name
                 setTextColor(ContextCompat.getColor(context, R.color.silver))
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                 setPadding(dp(4), dp(8), dp(8), dp(8))
@@ -623,6 +730,7 @@ class MainActivity : AppCompatActivity() {
                     if (!busy && index < selectedFiles.size) {
                         selectedFiles.removeAt(index)
                         renderLocalQueue()
+                        renderPhoneDirectory()
                     }
                 }
             })
