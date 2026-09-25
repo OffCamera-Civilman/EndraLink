@@ -156,7 +156,7 @@ public final class Fat16Volume {
      * Create a new 8.3 file in the selected directory. Existing names are never overwritten.
      * Data clusters are written first, FAT copies second, and the directory entry last.
      */
-    public synchronized void writeFile(int directoryCluster, String fileName, byte[] data) throws IOException {
+    public synchronized String writeFile(int directoryCluster, String fileName, byte[] data) throws IOException {
         if (writer == null) throw new IOException("This storage session does not permit writes.");
         if (data == null) throw new IOException("No file data supplied.");
         if (data.length > 64 * 1024 * 1024) throw new IOException("Selected file exceeds the 64 MiB transfer safety limit.");
@@ -210,6 +210,7 @@ public final class Fat16Volume {
                     writer.writeSector(slot.lba, verify);
                 }
             }
+            return canonical;
         } catch (IOException e) {
             if (fatLinked) bestEffortFree(allocated);
             throw e;
@@ -322,26 +323,40 @@ public final class Fat16Volume {
         if (name == null) throw new IOException("Selected file has no name.");
         String trimmed = name.trim();
         if (trimmed.isEmpty() || trimmed.equals(".") || trimmed.equals("..")) throw new IOException("Invalid file name.");
+
         int dot = trimmed.lastIndexOf('.');
         String base = dot > 0 ? trimmed.substring(0, dot) : trimmed;
-        String ext = dot > 0 ? trimmed.substring(dot + 1) : "";
-        if (base.length() < 1 || base.length() > 8 || ext.length() > 3) {
-            throw new IOException("For this first transfer build, calculator file names must use FAT 8.3 format (up to 8 characters plus a 3-character extension).");
-        }
-        String allowed = "$%'-_@~\u0060!(){}^#&";
+        String ext = dot > 0 && dot < trimmed.length() - 1 ? trimmed.substring(dot + 1) : "";
+
+        String safeBase = sanitizeShortPart(base, 8);
+        String safeExt = sanitizeShortPart(ext, 3);
+        if (safeBase.isEmpty()) safeBase = "FILE";
+
         byte[] raw = new byte[11];
         Arrays.fill(raw, (byte)' ');
-        String upperBase = base.toUpperCase(Locale.ROOT), upperExt = ext.toUpperCase(Locale.ROOT);
-        for (int i = 0; i < upperBase.length(); i++) raw[i] = shortChar(upperBase.charAt(i), allowed);
-        for (int i = 0; i < upperExt.length(); i++) raw[8 + i] = shortChar(upperExt.charAt(i), allowed);
+        byte[] baseBytes = safeBase.getBytes(Charset.forName("US-ASCII"));
+        byte[] extBytes = safeExt.getBytes(Charset.forName("US-ASCII"));
+        System.arraycopy(baseBytes, 0, raw, 0, baseBytes.length);
+        System.arraycopy(extBytes, 0, raw, 8, extBytes.length);
         return raw;
     }
 
-    private static byte shortChar(char c, String allowed) throws IOException {
-        if (c > 127 || !(Character.isLetterOrDigit(c) || allowed.indexOf(c) >= 0)) {
-            throw new IOException("File name contains a character not supported by FAT 8.3.");
+    /** Convert ordinary Android names into a conservative FAT 8.3 calculator name. */
+    private static String sanitizeShortPart(String input, int limit) {
+        if (input == null || input.isEmpty()) return "";
+        String allowed = "$%'-_@~\u0060!(){}^#&";
+        String upper = input.toUpperCase(Locale.ROOT);
+        StringBuilder out = new StringBuilder();
+        boolean lastUnderscore = false;
+        for (int i = 0; i < upper.length() && out.length() < limit; i++) {
+            char ch = upper.charAt(i);
+            char mapped = (ch <= 127 && (Character.isLetterOrDigit(ch) || allowed.indexOf(ch) >= 0)) ? ch : '_';
+            if (mapped == '_' && lastUnderscore) continue;
+            out.append(mapped);
+            lastUnderscore = mapped == '_';
         }
-        return (byte)c;
+        while (out.length() > 0 && out.charAt(out.length() - 1) == '_') out.setLength(out.length() - 1);
+        return out.toString();
     }
 
     private static String displayShortName(byte[] raw) {
