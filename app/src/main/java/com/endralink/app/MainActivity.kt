@@ -113,8 +113,9 @@ class MainActivity : AppCompatActivity() {
         }, ContextCompat.RECEIVER_NOT_EXPORTED)
         ContextCompat.registerReceiver(this, receiver, IntentFilter(UsbManager.ACTION_USB_DEVICE_DETACHED),
             ContextCompat.RECEIVER_NOT_EXPORTED)
-        findViewById<TextView>(R.id.version).text = BuildConfig.VERSION_NAME + " • FILE TRANSFER"
-        findViewById<TextView>(R.id.homeVersion).text = "EndraLink " + BuildConfig.VERSION_NAME + " • YOUR CALCULATOR. CONNECTED."
+        val appVersion = packageManager.getPackageInfo(packageName, 0).versionName ?: "0.1.9"
+        findViewById<TextView>(R.id.version).text = appVersion + " • FILE TRANSFER"
+        findViewById<TextView>(R.id.homeVersion).text = "EndraLink " + appVersion + " • YOUR CALCULATOR. CONNECTED."
         findViewById<Button>(R.id.copy).isEnabled = false
         disconnect.isEnabled = false
         findViewById<Button>(R.id.openPhone).setOnClickListener {
