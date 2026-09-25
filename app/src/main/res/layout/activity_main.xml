@@ -8,7 +8,7 @@
                 <Button android:id="@+id/homePrime" style="@style/TechButton" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:minHeight="100dp" android:layout_marginStart="8dp" android:text="HP Prime\nComing later" android:textSize="13sp" android:enabled="false"/>
             </LinearLayout>
             <Button android:id="@+id/homeDonate" style="@style/TechButton" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginStart="12dp" android:layout_marginEnd="12dp" android:text="♡ Donate — coming later" android:enabled="false"/>
-            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:padding="16dp" android:gravity="center" android:text="EndraLink 0.1.8 • YOUR CALCULATOR. CONNECTED." android:textColor="@color/muted" android:textSize="11sp"/>
+            <TextView android:id="@+id/homeVersion" android:layout_width="match_parent" android:layout_height="wrap_content" android:padding="16dp" android:gravity="center" android:text="EndraLink" android:textColor="@color/muted" android:textSize="11sp"/>
         </LinearLayout>
     </ScrollView>
 <ScrollView
@@ -19,7 +19,7 @@
         <Button android:id="@+id/homeBack" style="@style/TechButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="‹ Home"/>
         <com.endralink.app.ArtworkView android:id="@+id/workspaceHeader" android:layout_width="match_parent" android:layout_height="wrap_content"/>
         <TextView android:id="@+id/version" android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:text="0.1.8 • READ-ONLY PREVIEW" android:textSize="12sp" android:letterSpacing="0.08" android:textColor="@color/cyan"/>
+            android:text="FILE TRANSFER" android:textSize="12sp" android:letterSpacing="0.08" android:textColor="@color/cyan"/>
         <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp"
             android:background="@drawable/panel" android:padding="20dp" android:orientation="vertical">
             <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="USB CONNECTION"
@@ -55,13 +55,13 @@
         <TextView android:id="@+id/progressText" android:layout_width="match_parent" android:layout_height="wrap_content"
             android:text="No local file selected" android:textColor="@color/muted" android:paddingBottom="8dp"/>
         <Button android:id="@+id/copy" style="@style/TechButtonPrimary"
-            android:layout_width="wrap_content" android:layout_gravity="center_horizontal" android:layout_height="wrap_content" android:text="Transfer — coming next" android:enabled="false"/>
+            android:layout_width="wrap_content" android:layout_gravity="center_horizontal" android:layout_height="wrap_content" android:text="Transfer to calculator" android:enabled="false"/>
         <Button android:id="@+id/eject" style="@style/TechButton"
             android:layout_width="wrap_content" android:layout_gravity="center_horizontal" android:layout_height="wrap_content" android:text="Eject calculator" android:enabled="false"/>
         <Button android:id="@+id/exportLog" style="@style/TechButton"
             android:layout_width="wrap_content" android:layout_gravity="center_horizontal" android:layout_height="wrap_content" android:text="Export debug log"/>
         <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp"
-            android:text="Read-only browsing. No calculator files are created, changed, or deleted."
+            android:text="Android → calculator transfer enabled. Existing calculator files are never overwritten."
             android:textSize="12sp" android:gravity="center" android:textColor="@color/muted" android:paddingBottom="16dp"/>
         <com.endralink.app.ArtworkView android:id="@+id/workspaceFooter" android:layout_width="match_parent" android:layout_height="wrap_content"/>
     </LinearLayout>
